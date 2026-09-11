@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="csBrandGrad" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#2563EB" />
+      <stop offset="50%" stopColor="#1D4ED8" />
+      <stop offset="100%" stopColor="#1E40AF" />
+    </linearGradient>
+    <linearGradient id="csGlassStroke" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.4" />
+      <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.05" />
+    </linearGradient>
+  </defs>
+
+  <!-- Base Squircle with Subtle Depth -->
+  <rect x="2" y="2" width="96" height="96" rx="26" fill="url(#csBrandGrad)" />
+  <rect x="2.5" y="2.5" width="95" height="95" rx="25.5" stroke="url(#csGlassStroke)" stroke-width="1.5" />
+
+  <!-- Geometric Code Bracket / Stylized "C" Arc -->
+  <path
+    d="M66 28 H42 C30 28 22 36 22 50 C22 64 30 72 42 72 H66"
+    stroke="#FFFFFF"
+    stroke-width="8.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Central Commit Vertex & Dynamic Social Link -->
+  <line x1="38" y1="50" x2="68" y2="50" stroke="#93C5FD" stroke-width="5" stroke-linecap="round" />
+
+  <!-- Active Commit / Social Vertex Node -->
+  <circle cx="68" cy="50" r="7.5" fill="#FFFFFF" />
+  <circle cx="68" cy="50" r="3.5" fill="#2563EB" />
+
+  <!-- Micro prompt accent tick -->
+  <line x1="52" y1="64" x2="62" y2="64" stroke="#BFDBFE" stroke-width="3.5" stroke-linecap="round" opacity="0.8" />
+</svg>
