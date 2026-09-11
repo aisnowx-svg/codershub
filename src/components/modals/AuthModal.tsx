@@ -28,7 +28,7 @@ export const AuthModal: React.FC = () => {
       if (!username.trim()) return;
       const success = await signUp(email, password, username, displayName || username);
       if (success) {
-        showToast('Welcome to CODE SOCIAL! Builder profile created.');
+        showToast('Verification email sent! Please verify to enter CODE SOCIAL.');
       }
     }
   };
