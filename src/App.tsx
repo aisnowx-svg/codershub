@@ -10,7 +10,7 @@ import { NotificationsPage } from './pages/NotificationsPage';
 import { DeveloperProfile } from './pages/DeveloperProfile';
 import { ProjectPage } from './pages/ProjectPage';
 import { SearchPage } from './pages/SearchPage';
-import { VerifyEmailScreen } from './pages/VerifyEmailScreen';
+import { VerifyEmailPage } from './pages/VerifyEmailPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { getRouteFromPathname, getPathnameFromUI } from './utils/router';
 
@@ -40,8 +40,7 @@ export function App() {
   // Sync route on popstate (browser back / forward button)
   const syncFromUrl = useCallback(() => {
     const route = getRouteFromPathname();
-    if (route.isVerifyEmail) {
-      // Handled by verification status gate
+    if (route.isVerifyEmail || route.isAuthCallback) {
       return;
     }
     if (route.subPage) {
@@ -64,16 +63,12 @@ export function App() {
     const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
     if (isLoading || verificationStatus === 'INITIALIZING') return;
     if (currentPath === '/auth/callback') return;
+    if (currentPath === '/verify-email') return;
 
     if (verificationStatus === 'UNVERIFIED') {
       if (window.location.pathname !== '/verify-email') {
         window.history.replaceState(null, '', '/verify-email');
       }
-      return;
-    }
-
-    if (window.location.pathname === '/verify-email') {
-      window.history.replaceState(null, '', '/home');
       return;
     }
 
@@ -154,16 +149,19 @@ export function App() {
     );
   }
 
-  // 1. MANDATORY EMAIL VERIFICATION GATE
-  // An unverified user MUST NOT access Home, Discover, Projects, Profile, Notifications, etc.
-  if (verificationStatus === 'UNVERIFIED') {
-    return <VerifyEmailScreen />;
-  }
-
-  // 2. GITHUB OAUTH / APP CALLBACK ROUTE
+  // 1. DEDICATED TOP-LEVEL ROUTES
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
   if (currentPath === '/auth/callback') {
     return <AuthCallbackPage />;
+  }
+  if (currentPath === '/verify-email') {
+    return <VerifyEmailPage />;
+  }
+
+  // 2. MANDATORY EMAIL VERIFICATION GATE FOR PROTECTED APPLICATION ACCESS
+  // An unverified user MUST NOT access Home, Discover, Projects, Profile, Notifications, etc.
+  if (verificationStatus === 'UNVERIFIED') {
+    return <VerifyEmailPage />;
   }
 
   // 3. Onboarding Gate (only for verified users who haven't completed onboarding)

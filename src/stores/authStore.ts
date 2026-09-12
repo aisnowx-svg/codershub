@@ -11,7 +11,7 @@ export type AuthVerificationStatus =
   | 'UNVERIFIED'        // Account created or signed in, but email is unconfirmed
   | 'VERIFIED';         // Authenticated and email_confirmed_at is confirmed
 
-const DEFAULT_GUEST_USER: Developer = {
+export const DEFAULT_GUEST_USER: Developer = {
   id: '',
   name: 'Builder',
   handle: 'builder',
@@ -152,7 +152,7 @@ export const useAuthStore = create<AuthState>()(
                 verificationStatus: 'VERIFIED',
                 unverifiedEmail: null,
                 githubConnected: !!profile.githubHandle,
-                onboardingCompleted: true,
+                onboardingCompleted: get().onboardingCompleted,
                 isLoading: false,
               });
             }
@@ -199,14 +199,10 @@ export const useAuthStore = create<AuthState>()(
                   verificationStatus: 'VERIFIED',
                   unverifiedEmail: null,
                   githubConnected: !!profile.githubHandle,
-                  onboardingCompleted: true,
+                  onboardingCompleted: get().onboardingCompleted,
                   isLoading: false,
                   verificationMessage: null,
                 });
-
-                if (typeof window !== 'undefined' && window.location.pathname === '/verify-email') {
-                  window.history.replaceState(null, '', '/home');
-                }
               } else {
                 set({
                   session: newSession,
@@ -375,7 +371,7 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: true,
             verificationStatus: 'VERIFIED',
             unverifiedEmail: null,
-            onboardingCompleted: true,
+            onboardingCompleted: get().onboardingCompleted,
             authModalOpen: false,
             isLoading: false,
             authError: null,
@@ -420,16 +416,12 @@ export const useAuthStore = create<AuthState>()(
               verificationStatus: 'VERIFIED',
               unverifiedEmail: null,
               isCheckingVerification: false,
-              onboardingCompleted: true,
+              onboardingCompleted: get().onboardingCompleted,
               verificationMessage: {
                 type: 'success',
                 text: 'Email verified! Welcome to CODE SOCIAL.',
               },
             });
-
-            if (typeof window !== 'undefined') {
-              window.history.replaceState(null, '', '/home');
-            }
 
             return { verified: true };
           } else {
@@ -534,7 +526,7 @@ export const useAuthStore = create<AuthState>()(
         });
 
         if (typeof window !== 'undefined') {
-          window.history.replaceState(null, '', '/home');
+          window.history.replaceState(null, '', '/');
         }
       },
 
@@ -554,7 +546,7 @@ export const useAuthStore = create<AuthState>()(
             authError: null,
           });
           if (typeof window !== 'undefined') {
-            window.history.replaceState(null, '', '/home');
+            window.history.replaceState(null, '', '/');
           }
         } catch (err: any) {
           console.error('Sign out error:', err);
