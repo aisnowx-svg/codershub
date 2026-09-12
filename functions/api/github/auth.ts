@@ -21,18 +21,21 @@ async function handleAuth(context: { env: Record<string, string | undefined>; re
   const clientId = context.env.GITHUB_CLIENT_ID || context.env.VITE_GITHUB_CLIENT_ID;
   const appName = context.env.GITHUB_APP_NAME || 'devquro';
 
-  let authUrl = '';
-  if (clientId) {
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      state: state,
-    });
-    authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
-  } else {
-    // If client ID is not configured yet, redirect to GitHub App installation
-    authUrl = `https://github.com/apps/${appName}/installations/new`;
+  if (!clientId) {
+    return jsonResponse(
+      {
+        error: 'GITHUB_CLIENT_ID is not configured on the backend. Please add GITHUB_CLIENT_ID in Cloudflare Pages -> Settings -> Environment Variables.',
+      },
+      500
+    );
   }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state: state,
+  });
+  const authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
 
   const wantsJson =
     url.searchParams.get('format') === 'json' ||

@@ -61,8 +61,9 @@ export function App() {
 
   // Sync tab/subPage state changes to URL
   useEffect(() => {
+    const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
     if (isLoading || verificationStatus === 'INITIALIZING') return;
-    if (window.location.pathname === '/auth/callback') return;
+    if (currentPath === '/auth/callback') return;
 
     if (verificationStatus === 'UNVERIFIED') {
       if (window.location.pathname !== '/verify-email') {
@@ -160,7 +161,8 @@ export function App() {
   }
 
   // 2. GITHUB OAUTH / APP CALLBACK ROUTE
-  if (window.location.pathname === '/auth/callback') {
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (currentPath === '/auth/callback') {
     return <AuthCallbackPage />;
   }
 

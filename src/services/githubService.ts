@@ -24,8 +24,8 @@ export const githubService = {
       return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`;
     }
 
-    // Default GitHub App direct installation URL
-    return 'https://github.com/apps/devquro/installations/new';
+    // Client ID missing - warn user clearly instead of opening dead installation 404 page
+    throw new Error('GitHub App Client ID is not configured. Please add VITE_GITHUB_CLIENT_ID to your .env file and GITHUB_CLIENT_ID to your Cloudflare Pages Secrets.');
   },
 
   /**
