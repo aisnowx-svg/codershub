@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, AlertCircle, RefreshCw, ArrowRight, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, AlertCircle, RefreshCw, ArrowRight, ShieldAlert, Download } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useGitHubStore } from '../stores/githubStore';
 import { useUIStore } from '../stores/uiStore';
 import { CodeSocialLogo } from '../components/common/CodeSocialLogo';
 import { GithubIcon } from '../components/common/Icons';
 
-type CallbackStatus = 'loading' | 'success' | 'denied' | 'error' | 'unauthenticated';
+type CallbackStatus = 'loading' | 'success' | 'needs_installation' | 'denied' | 'error' | 'unauthenticated';
 
 export const AuthCallbackPage: React.FC = () => {
   const { isAuthenticated, currentUser, setAuthModalOpen } = useAuthStore();
@@ -16,6 +16,7 @@ export const AuthCallbackPage: React.FC = () => {
   const [status, setStatus] = useState<CallbackStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [connectedUsername, setConnectedUsername] = useState<string>('');
+  const [installationUrl, setInstallationUrl] = useState<string>('https://github.com/apps/devquro/installations/new');
 
   useEffect(() => {
     const processCallback = async () => {
@@ -23,6 +24,7 @@ export const AuthCallbackPage: React.FC = () => {
       const errorParam = params.get('error');
       const errorDesc = params.get('error_description');
       const code = params.get('code');
+      const state = params.get('state') || undefined;
       const installationId = params.get('installation_id') || undefined;
 
       // 1. Check for user denial or GitHub error
@@ -56,21 +58,29 @@ export const AuthCallbackPage: React.FC = () => {
       // 4. Exchange code securely via backend
       try {
         setStatus('loading');
-        const success = await handleCallback(code, installationId);
+        const result = await handleCallback(code, installationId, state);
 
-        if (success) {
+        if (result) {
           await loadAccount(currentUser.id);
-          const storeAccount = useGitHubStore.getState().account;
-          const uname = storeAccount?.githubUsername || 'your account';
+          const uname = result.account?.githubUsername || 'your account';
           setConnectedUsername(uname);
-          setStatus('success');
-          showToast(`GitHub account @${uname} connected successfully!`);
 
-          // Automatically return to profile after brief delay
-          setTimeout(() => {
-            window.history.replaceState(null, '', '/profile');
-            setActiveTab('profile');
-          }, 1800);
+          if (result.needsInstallation) {
+            setStatus('needs_installation');
+            if (result.installationUrl) {
+              setInstallationUrl(result.installationUrl);
+            }
+            setErrorMessage(result.message || 'Please install DevQuro to grant repository access.');
+          } else {
+            setStatus('success');
+            showToast(`GitHub account @${uname} connected successfully!`);
+
+            // Automatically return to profile after brief delay
+            setTimeout(() => {
+              window.history.replaceState(null, '', '/profile');
+              setActiveTab('profile');
+            }, 1800);
+          }
         } else {
           const storeError = useGitHubStore.getState().lastSyncError;
           setStatus('error');
@@ -124,6 +134,12 @@ export const AuthCallbackPage: React.FC = () => {
               </div>
             )}
 
+            {status === 'needs_installation' && (
+              <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                <Download className="w-8 h-8" />
+              </div>
+            )}
+
             {status === 'denied' && (
               <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
                 <ShieldAlert className="w-8 h-8" />
@@ -142,6 +158,7 @@ export const AuthCallbackPage: React.FC = () => {
             <h1 className="text-xl font-bold tracking-tight text-white">
               {status === 'loading' && 'Connecting GitHub...'}
               {status === 'success' && 'GitHub Connected!'}
+              {status === 'needs_installation' && 'Install DevQuro on GitHub'}
               {status === 'denied' && 'Authorization Cancelled'}
               {status === 'unauthenticated' && 'Authentication Required'}
               {status === 'error' && 'Connection Failed'}
@@ -154,6 +171,11 @@ export const AuthCallbackPage: React.FC = () => {
               {status === 'success' && (
                 <>
                   Successfully linked <span className="font-mono text-blue-400 font-semibold">@{connectedUsername}</span> to your CODE SOCIAL profile. Redirecting to your profile...
+                </>
+              )}
+              {status === 'needs_installation' && (
+                <>
+                  Your GitHub identity <span className="font-mono text-blue-400 font-semibold">@{connectedUsername}</span> is linked, but the <strong className="text-white">DevQuro GitHub App</strong> must be installed on your GitHub account to grant repository access.
                 </>
               )}
               {status === 'denied' && errorMessage}
@@ -182,6 +204,26 @@ export const AuthCallbackPage: React.FC = () => {
                 <span>Go to Profile</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
+            )}
+
+            {status === 'needs_installation' && (
+              <div className="space-y-2.5">
+                <a
+                  href={installationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <GithubIcon className="w-4 h-4" />
+                  <span>Install DevQuro on GitHub</span>
+                </a>
+                <button
+                  onClick={handleReturnToProfile}
+                  className="w-full py-2 px-4 rounded-xl text-slate-400 hover:text-slate-200 text-xs transition-colors cursor-pointer"
+                >
+                  Return to Profile
+                </button>
+              </div>
             )}
 
             {(status === 'denied' || status === 'error') && (

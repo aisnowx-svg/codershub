@@ -42,6 +42,8 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
     repositories,
     isSyncing,
     isConnecting,
+    needsInstallation,
+    installationUrl,
     lastSyncError,
     startConnect,
     disconnectAccount,
@@ -429,6 +431,30 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
+
+              {/* App Installation Required Notice */}
+              {(needsInstallation || !account.installationId) && (
+                <div className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <p className="font-semibold text-amber-950">DevQuro App installation required</p>
+                      <p className="text-[11px] text-slate-600">
+                        Install DevQuro or grant repository access to import repositories and verify Proof of Work.
+                      </p>
+                    </div>
+                  </div>
+                  <a
+                    href={installationUrl || 'https://github.com/apps/devquro/installations/new'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors shrink-0 shadow-xs"
+                  >
+                    <span>Install DevQuro</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
 
               {/* Accessible Repositories */}
               {repositories.length > 0 ? (

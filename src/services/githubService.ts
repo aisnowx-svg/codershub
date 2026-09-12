@@ -2,41 +2,73 @@ import { supabase } from '../lib/supabase';
 import { GitHubAccount, GitHubRepository, ProjectGitHubRepository } from '../types/github';
 import { getAuthCallbackUrl } from '../utils/url';
 
+export interface GitHubExchangeResult {
+  account: GitHubAccount;
+  repositories: GitHubRepository[];
+  needsInstallation?: boolean;
+  installationUrl?: string;
+  message?: string;
+}
+
 export const githubService = {
   /**
-   * Generates or fetches the GitHub OAuth / App installation authorization URL
+   * Generates or fetches the GitHub OAuth / App authorization URL.
+   * Authenticates with session token so the backend generates an HMAC-signed state.
    */
-  async getAuthUrl(redirectUri?: string, state?: string): Promise<string> {
+  async getAuthUrl(redirectUri?: string): Promise<string> {
     const callback = redirectUri || getAuthCallbackUrl();
-    const secureState = state || (typeof crypto !== 'undefined' ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
     try {
-      const res = await fetch(`/api/github/auth?format=json&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`);
+      const res = await fetch(
+        `/api/github/auth?format=json&redirect_uri=${encodeURIComponent(callback)}`,
+        { headers }
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.url) return data.url;
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        if (errorData.error) {
+          throw new Error(errorData.error);
+        }
       }
-    } catch {
-      // Endpoint not reached; fallback to direct OAuth/Install URL
+    } catch (err: any) {
+      if (err.message && !err.message.includes('fetch')) {
+        throw err;
+      }
+      // Endpoint not reached (e.g. offline dev without server)
     }
 
     const clientId = (import.meta as any).env?.VITE_GITHUB_CLIENT_ID;
-    if (clientId) {
-      return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`;
+    if (clientId && !clientId.includes('YOUR_GITHUB_APP_CLIENT_ID')) {
+      const clientState = crypto.randomUUID();
+      return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(
+        clientId.trim()
+      )}&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(clientState)}`;
     }
 
-    // Client ID missing - warn user clearly instead of opening dead installation 404 page
-    throw new Error('GitHub App Client ID is not configured. Please add VITE_GITHUB_CLIENT_ID to your .env file and GITHUB_CLIENT_ID to your Cloudflare Pages Secrets.');
+    throw new Error(
+      'GitHub App Client ID is not configured. Please add GITHUB_CLIENT_ID in Cloudflare Pages -> Settings -> Environment Variables and VITE_GITHUB_CLIENT_ID in .env.'
+    );
   },
 
   /**
-   * Exchanges GitHub authorization code for access token via backend service
+   * Exchanges GitHub authorization code for access token via backend service.
+   * Sends code, state, and installation_id to /api/github/callback.
    */
   async exchangeCode(
     code: string,
     installationId?: string,
-    redirectUri?: string
-  ): Promise<{ account: GitHubAccount; repositories: GitHubRepository[] }> {
+    redirectUri?: string,
+    state?: string
+  ): Promise<GitHubExchangeResult> {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
 
@@ -56,6 +88,7 @@ export const githubService = {
         code,
         installation_id: installationId ? Number(installationId) : undefined,
         redirect_uri: callback,
+        state,
       }),
     });
 
@@ -101,7 +134,13 @@ export const githubService = {
       updatedAt: r.updated_at || new Date().toISOString(),
     }));
 
-    return { account, repositories };
+    return {
+      account,
+      repositories,
+      needsInstallation: Boolean(data.needs_installation),
+      installationUrl: data.installation_url,
+      message: data.message,
+    };
   },
 
   /**
@@ -210,9 +249,27 @@ export const githubService = {
   },
 
   /**
-   * Disconnects GitHub account safely from database
+   * Disconnects GitHub account safely via server and database
    */
   async disconnect(userId: string): Promise<boolean> {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    if (token) {
+      try {
+        await fetch('/api/github/disconnect', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } catch (err) {
+        console.warn('[GitHub Disconnect] Backend endpoint warning:', err);
+      }
+    }
+
+    // Direct database cleanup via Supabase RLS as safeguard
     await supabase.from('github_accounts').delete().eq('user_id', userId);
     await supabase.from('profiles').update({ github_handle: '' }).eq('id', userId);
     return true;

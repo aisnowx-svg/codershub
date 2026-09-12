@@ -1,6 +1,7 @@
 /**
  * Shared Utilities for Cloudflare Pages Functions
  * Handles Supabase connections, User Session validation,
+ * cryptographic OAuth state generation/verification,
  * and Web Crypto API RSA RS256 JWT generation for GitHub App authentication.
  */
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -154,7 +155,6 @@ function encodeAsn1Length(len: number): Uint8Array {
  * Imports an RSA private key PEM (supporting both PKCS#1 and PKCS#8) using Web Crypto API.
  */
 export async function importRsaPrivateKey(pem: string): Promise<CryptoKey> {
-  // Normalize formatting (handle escaped newlines \n in environment variables)
   const normalizedPem = pem.replace(/\\n/g, '\n').trim();
   const cleanPem = normalizedPem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
   const der = base64ToUint8Array(cleanPem);
@@ -162,7 +162,6 @@ export async function importRsaPrivateKey(pem: string): Promise<CryptoKey> {
   if (normalizedPem.includes('BEGIN RSA PRIVATE KEY')) {
     // Convert PKCS#1 to PKCS#8 DER
     const version = new Uint8Array([0x02, 0x01, 0x00]);
-    // AlgorithmIdentifier for rsaEncryption: OID 1.2.840.113549.1.1.1, NULL
     const algorithm = new Uint8Array([
       0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
     ]);
@@ -204,7 +203,7 @@ export async function generateGitHubAppJwt(appId: string, privateKeyPem: string)
   const header = { alg: 'RS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    iat: now - 60, // 60 seconds clock drift
+    iat: now - 60, // 60 seconds clock drift allowance
     exp: now + 10 * 60, // 10 minutes maximum expiration
     iss: appId,
   };
@@ -275,4 +274,264 @@ export async function getInstallationAccessToken(
     console.error('[GitHub App] Error creating installation token:', err);
     return null;
   }
+}
+
+// ======================================================================
+// Cryptographic HMAC-SHA256 OAuth State
+// ======================================================================
+
+async function hmacSha256Hex(secret: string, data: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Generates an HMAC-SHA256 signed OAuth state parameter tied to the authenticated user ID.
+ */
+export async function generateOAuthState(userId: string, secret: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const payload = `${userId}:${now}:${nonce}`;
+  const sig = await hmacSha256Hex(secret, payload);
+  const token = `${payload}:${sig}`;
+  return btoa(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Verifies an HMAC-SHA256 signed OAuth state parameter against the authenticated user ID.
+ * Protects against CSRF and replay attacks. 15-minute validity window.
+ */
+export async function verifyOAuthState(
+  state: string,
+  expectedUserId: string,
+  secret: string
+): Promise<{ valid: boolean; reason?: string }> {
+  if (!state || typeof state !== 'string') {
+    return { valid: false, reason: 'Missing OAuth state parameter' };
+  }
+
+  try {
+    let base64 = state.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4 !== 0) base64 += '=';
+    const decoded = atob(base64);
+
+    const parts = decoded.split(':');
+    if (parts.length !== 4) {
+      return { valid: false, reason: 'Malformed OAuth state structure' };
+    }
+
+    const [userId, timestampStr, nonce, sig] = parts;
+    const timestamp = parseInt(timestampStr, 10);
+    const now = Math.floor(Date.now() / 1000);
+
+    // 1. Validate expiration (15 minutes = 900 seconds)
+    if (isNaN(timestamp) || now - timestamp > 900 || timestamp - now > 60) {
+      return { valid: false, reason: 'OAuth state has expired. Please try connecting again.' };
+    }
+
+    // 2. Validate cryptographic signature
+    const expectedPayload = `${userId}:${timestampStr}:${nonce}`;
+    const expectedSig = await hmacSha256Hex(secret, expectedPayload);
+
+    if (expectedSig !== sig) {
+      return { valid: false, reason: 'Invalid OAuth state signature (CSRF protection)' };
+    }
+
+    // 3. Validate user ownership
+    if (userId !== expectedUserId) {
+      return { valid: false, reason: 'OAuth state was initiated by a different user session' };
+    }
+
+    return { valid: true };
+  } catch (err: any) {
+    return { valid: false, reason: `Failed to decode OAuth state: ${err.message}` };
+  }
+}
+
+// ======================================================================
+// GitHub App Installation Verification & Repository Sync
+// ======================================================================
+
+/**
+ * Looks up the DevQuro GitHub App installation for a user using the App JWT.
+ */
+export async function findUserInstallation(
+  env: Record<string, string | undefined>,
+  githubUsername: string
+): Promise<{ id: number; account: { id: number; login: string } } | null> {
+  const appId = env.GITHUB_APP_ID;
+  const privateKey = env.GITHUB_PRIVATE_KEY;
+
+  if (!appId || !privateKey) return null;
+
+  try {
+    const appJwt = await generateGitHubAppJwt(appId, privateKey);
+    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(githubUsername)}/installation`, {
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'DevQuro-CodeSocial',
+      },
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+
+    if (!res.ok) {
+      console.warn(`[GitHub App] Error checking installation for ${githubUsername}: ${res.status}`);
+      return null;
+    }
+
+    const data: any = await res.json();
+    return {
+      id: data.id,
+      account: {
+        id: data.account?.id,
+        login: data.account?.login,
+      },
+    };
+  } catch (err) {
+    console.error('[GitHub App] findUserInstallation error:', err);
+    return null;
+  }
+}
+
+/**
+ * Syncs repositories accessible to the GitHub App installation into public.github_repositories.
+ * Strict rule: NEVER creates public Build Logs, feed posts, or notifications from commits.
+ */
+export async function syncInstallationRepositories(
+  supabase: SupabaseClient,
+  env: Record<string, string | undefined>,
+  account: { id: string; installation_id?: number | null; github_username: string }
+): Promise<{ repositories: any[]; authMethod: string }> {
+  let rawRepos: any[] = [];
+  let usedInstallation = false;
+
+  if (account.installation_id) {
+    const token = await getInstallationAccessToken(env, account.installation_id);
+    if (token) {
+      const res = await fetch('https://api.github.com/installation/repositories?per_page=100', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'DevQuro-CodeSocial',
+        },
+      });
+
+      if (res.ok) {
+        const data: any = await res.json();
+        rawRepos = data.repositories || [];
+        usedInstallation = true;
+      }
+    }
+  }
+
+  // Fallback to public repositories if installation access token was unavailable
+  if (!usedInstallation || rawRepos.length === 0) {
+    const publicRes = await fetch(
+      `https://api.github.com/users/${encodeURIComponent(account.github_username)}/repos?per_page=100&sort=updated`,
+      {
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'DevQuro-CodeSocial',
+        },
+      }
+    );
+    if (publicRes.ok) {
+      rawRepos = await publicRes.json();
+    }
+  }
+
+  // Upsert into Supabase
+  const mappedRepos: any[] = [];
+  const accessibleRepoIds = new Set<number>();
+
+  for (const r of rawRepos) {
+    accessibleRepoIds.add(r.id);
+    const repoPayload = {
+      account_id: account.id,
+      github_repo_id: r.id,
+      full_name: r.full_name,
+      name: r.name,
+      description: r.description || '',
+      html_url: r.html_url,
+      default_branch: r.default_branch || 'main',
+      is_private: Boolean(r.private),
+      is_fork: Boolean(r.fork),
+      primary_language: r.language || '',
+      stars_count: r.stargazers_count || 0,
+      forks_count: r.forks_count || 0,
+      open_issues_count: r.open_issues_count || 0,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: saved } = await supabase
+      .from('github_repositories')
+      .upsert(repoPayload, { onConflict: 'account_id,github_repo_id' })
+      .select('*')
+      .single();
+
+    if (saved) {
+      mappedRepos.push({
+        id: saved.id,
+        githubRepoId: Number(saved.github_repo_id),
+        fullName: saved.full_name,
+        name: saved.name,
+        ownerLogin: saved.full_name.split('/')[0] || account.github_username,
+        description: saved.description || '',
+        htmlUrl: saved.html_url,
+        defaultBranch: saved.default_branch || 'main',
+        isPrivate: Boolean(saved.is_private),
+        isFork: Boolean(saved.is_fork),
+        primaryLanguage: saved.primary_language || null,
+        starsCount: saved.stars_count || 0,
+        forksCount: saved.forks_count || 0,
+        openIssuesCount: saved.open_issues_count || 0,
+        updatedAt: saved.updated_at,
+      });
+    }
+  }
+
+  // If using installation, clean up any repositories previously synced that are no longer accessible
+  if (usedInstallation && accessibleRepoIds.size > 0) {
+    const { data: existing } = await supabase
+      .from('github_repositories')
+      .select('id, github_repo_id')
+      .eq('account_id', account.id);
+
+    if (existing) {
+      for (const ex of existing) {
+        if (!accessibleRepoIds.has(Number(ex.github_repo_id))) {
+          await supabase.from('github_repositories').delete().eq('id', ex.id);
+        }
+      }
+    }
+  }
+
+  // Update account sync status
+  await supabase
+    .from('github_accounts')
+    .update({
+      sync_status: 'synced',
+      last_synced_at: new Date().toISOString(),
+      public_repo_count: mappedRepos.length,
+    })
+    .eq('id', account.id);
+
+  return {
+    repositories: mappedRepos,
+    authMethod: usedInstallation ? 'github_app_installation' : 'public_metadata',
+  };
 }

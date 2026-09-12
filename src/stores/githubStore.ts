@@ -5,7 +5,7 @@ import {
   GitHubRepository,
   ProjectGitHubRepository,
 } from '../types/github';
-import { githubService } from '../services/githubService';
+import { githubService, GitHubExchangeResult } from '../services/githubService';
 
 interface GitHubStoreState {
   account: GitHubAccount | null;
@@ -14,11 +14,13 @@ interface GitHubStoreState {
   isSyncing: boolean;
   isConnecting: boolean;
   lastSyncError: string | null;
+  needsInstallation: boolean;
+  installationUrl: string | null;
 
   // Actions
   loadAccount: (userId: string) => Promise<void>;
   startConnect: () => Promise<void>;
-  handleCallback: (code: string, installationId?: string) => Promise<boolean>;
+  handleCallback: (code: string, installationId?: string, state?: string) => Promise<GitHubExchangeResult | null>;
   disconnectAccount: (userId: string) => Promise<boolean>;
   triggerSync: () => Promise<boolean>;
   linkRepositoryToProject: (
@@ -42,6 +44,8 @@ export const useGitHubStore = create<GitHubStoreState>()(
       isSyncing: false,
       isConnecting: false,
       lastSyncError: null,
+      needsInstallation: false,
+      installationUrl: null,
 
       clearError: () => set({ lastSyncError: null }),
 
@@ -51,7 +55,12 @@ export const useGitHubStore = create<GitHubStoreState>()(
           const account = await githubService.getStatus(userId);
           if (account) {
             const repositories = await githubService.getRepositories(account.id);
-            set({ account, repositories, lastSyncError: null });
+            set({
+              account,
+              repositories,
+              lastSyncError: null,
+              needsInstallation: !account.installationId,
+            });
           } else {
             set({ account: null, repositories: [] });
           }
@@ -62,7 +71,7 @@ export const useGitHubStore = create<GitHubStoreState>()(
 
       startConnect: async () => {
         try {
-          set({ isConnecting: true, lastSyncError: null });
+          set({ isConnecting: true, lastSyncError: null, needsInstallation: false });
           const authUrl = await githubService.getAuthUrl();
           if (typeof window !== 'undefined') {
             window.location.href = authUrl;
@@ -75,23 +84,28 @@ export const useGitHubStore = create<GitHubStoreState>()(
         }
       },
 
-      handleCallback: async (code: string, installationId?: string) => {
+      handleCallback: async (code: string, installationId?: string, state?: string) => {
         try {
           set({ isConnecting: true, lastSyncError: null });
-          const { account, repositories } = await githubService.exchangeCode(code, installationId);
+          const result = await githubService.exchangeCode(code, installationId, undefined, state);
+
           set({
-            account,
-            repositories,
+            account: result.account,
+            repositories: result.repositories,
             isConnecting: false,
-            lastSyncError: null,
+            lastSyncError: result.message || null,
+            needsInstallation: Boolean(result.needsInstallation),
+            installationUrl: result.installationUrl || null,
           });
-          return true;
+
+          return result;
         } catch (err: any) {
           set({
             isConnecting: false,
             lastSyncError: err.message || 'Failed to complete GitHub authorization',
+            needsInstallation: false,
           });
-          return false;
+          return null;
         }
       },
 
@@ -104,6 +118,8 @@ export const useGitHubStore = create<GitHubStoreState>()(
             repositories: [],
             isSyncing: false,
             lastSyncError: null,
+            needsInstallation: false,
+            installationUrl: null,
           });
           return true;
         } catch (err: any) {
@@ -212,6 +228,8 @@ export const useGitHubStore = create<GitHubStoreState>()(
       partialize: (state) => ({
         account: state.account,
         repositories: state.repositories,
+        needsInstallation: state.needsInstallation,
+        installationUrl: state.installationUrl,
       }),
     }
   )

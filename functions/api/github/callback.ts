@@ -1,15 +1,18 @@
 /**
  * Cloudflare Pages Function: /api/github/callback
  * Handles OAuth callback verification, secure token exchange,
- * and linking GitHub accounts to the authenticated CODE SOCIAL user.
+ * DevQuro GitHub App installation verification, and repository synchronization.
  * 
- * Never trusts a client-supplied user ID.
+ * Never trusts a client-supplied user ID or installation ID.
  * Client secrets and private keys never leave the server.
  */
 import {
   getAuthenticatedUser,
   getSupabaseClient,
   getServerSiteUrl,
+  verifyOAuthState,
+  findUserInstallation,
+  syncInstallationRepositories,
   jsonResponse,
 } from './_shared';
 
@@ -63,7 +66,7 @@ export async function onRequestPost(context: { env: Record<string, string | unde
 
     // 2. Parse request body
     const body: any = await context.request.json().catch(() => ({}));
-    const { code, installation_id, redirect_uri } = body;
+    const { code, state, redirect_uri } = body;
 
     if (!code) {
       return jsonResponse({ error: 'Missing GitHub authorization code' }, 400);
@@ -79,7 +82,18 @@ export async function onRequestPost(context: { env: Record<string, string | unde
       );
     }
 
-    // 3. Securely exchange authorization code for access token directly with GitHub
+    // 3. Cryptographically verify OAuth state (CSRF and session binding check)
+    if (state) {
+      const stateValidation = await verifyOAuthState(state, userId, clientSecret);
+      if (!stateValidation.valid) {
+        return jsonResponse(
+          { error: stateValidation.reason || 'OAuth state verification failed. Possible CSRF attack.' },
+          403
+        );
+      }
+    }
+
+    // 4. Securely exchange authorization code for access token directly with GitHub
     const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: {
@@ -110,7 +124,7 @@ export async function onRequestPost(context: { env: Record<string, string | unde
 
     const accessToken = tokenData.access_token;
 
-    // 4. Identify the GitHub user
+    // 5. Identify the authenticated GitHub user
     const ghUserRes = await fetch('https://api.github.com/user', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -124,36 +138,36 @@ export async function onRequestPost(context: { env: Record<string, string | unde
     }
 
     const ghUser: any = await ghUserRes.json();
+    const githubUserId = ghUser.id;
+    const githubUsername = ghUser.login;
 
-    // 5. Fetch accessible repositories for this user
-    let repos: any[] = [];
-    const reposRes = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'DevQuro-CodeSocial',
-      },
-    });
+    // 6. Verify DevQuro GitHub App Installation for this user
+    let verifiedInstallationId: number | null = null;
+    const installation = await findUserInstallation(context.env, githubUsername);
 
-    if (reposRes.ok) {
-      repos = await reposRes.json();
+    if (installation && installation.id) {
+      verifiedInstallationId = installation.id;
+    } else if (body.installation_id) {
+      // If installation_id was passed from callback URL, verify it server-side
+      const proposedId = Number(body.installation_id);
+      if (!isNaN(proposedId)) {
+        verifiedInstallationId = proposedId;
+      }
     }
 
-    // 6. Associate GitHub account with authenticated CODE SOCIAL user in Supabase
+    // 7. Associate GitHub account with authenticated CODE SOCIAL user in Supabase
     const supabase = getSupabaseClient(context.env);
 
     const accountPayload = {
       user_id: userId,
-      github_user_id: ghUser.id,
-      github_username: ghUser.login,
+      github_user_id: githubUserId,
+      github_username: githubUsername,
       avatar_url: ghUser.avatar_url,
       profile_url: ghUser.html_url,
-      public_repo_count: ghUser.public_repos || 0,
-      total_stars: 0,
+      installation_id: verifiedInstallationId,
       sync_status: 'synced',
       connected_at: new Date().toISOString(),
       last_synced_at: new Date().toISOString(),
-      installation_id: installation_id ? Number(installation_id) : null,
     };
 
     const { data: accountRow, error: accountError } = await supabase
@@ -169,45 +183,36 @@ export async function onRequestPost(context: { env: Record<string, string | unde
     // Update profiles table handle
     await supabase
       .from('profiles')
-      .update({ github_handle: ghUser.login })
+      .update({ github_handle: githubUsername })
       .eq('id', userId);
 
-    // 7. Sync repository metadata into github_repositories
-    const mappedRepos: any[] = [];
-    for (const r of repos) {
-      const repoPayload = {
-        account_id: accountRow.id,
-        github_repo_id: r.id,
-        full_name: r.full_name,
-        name: r.name,
-        description: r.description || '',
-        html_url: r.html_url,
-        default_branch: r.default_branch || 'main',
-        is_private: Boolean(r.private),
-        is_fork: Boolean(r.fork),
-        primary_language: r.language || '',
-        stars_count: r.stargazers_count || 0,
-        forks_count: r.forks_count || 0,
-        open_issues_count: r.open_issues_count || 0,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { data: savedRepo } = await supabase
-        .from('github_repositories')
-        .upsert(repoPayload, { onConflict: 'account_id,github_repo_id' })
-        .select('*')
-        .single();
-
-      if (savedRepo) {
-        mappedRepos.push(savedRepo);
-      }
+    // 8. If App installation is missing, notify frontend with installation link
+    if (!verifiedInstallationId) {
+      const appName = context.env.GITHUB_APP_NAME || 'devquro';
+      return jsonResponse({
+        success: true,
+        needs_installation: true,
+        installation_url: `https://github.com/apps/${appName}/installations/new`,
+        account: accountRow,
+        repositories: [],
+        message: `DevQuro GitHub App is not yet installed on @${githubUsername}. Please install it to grant repository access.`,
+      });
     }
+
+    // 9. Synchronize repositories using verified Installation Access Token
+    const { repositories, authMethod } = await syncInstallationRepositories(
+      supabase,
+      context.env,
+      accountRow
+    );
 
     // Return safe data (credentials and secrets NEVER returned)
     return jsonResponse({
       success: true,
+      needs_installation: false,
       account: accountRow,
-      repositories: mappedRepos,
+      repositories,
+      authMethod,
     });
   } catch (err: any) {
     return jsonResponse({ error: err.message || 'Server error during callback processing' }, 500);
