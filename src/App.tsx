@@ -1,8 +1,10 @@
 import { useEffect, useCallback } from 'react';
 import { useAuthStore } from './stores/authStore';
+import { useAppStateStore } from './stores/appStateStore';
 import { useUIStore } from './stores/uiStore';
 import { AppShell } from './layouts/AppShell';
-import { Onboarding } from './pages/Onboarding';
+import { FirstVisitIntro } from './pages/FirstVisitIntro';
+import { ProfileOnboarding } from './pages/ProfileOnboarding';
 import { HomeFeed } from './pages/HomeFeed';
 import { Discover } from './pages/Discover';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -15,7 +17,18 @@ import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { getRouteFromPathname, getPathnameFromUI } from './utils/router';
 
 export function App() {
-  const { onboardingCompleted, initializeAuth, isLoading, verificationStatus } = useAuthStore();
+  const {
+    hasSession,
+    emailVerified,
+    profileOnboardingCompleted,
+    authState,
+    initializeAuth,
+    isLoading,
+    verificationStatus,
+  } = useAuthStore();
+
+  const { introCompleted } = useAppStateStore();
+
   const {
     activeTab,
     subPage,
@@ -32,12 +45,12 @@ export function App() {
     openDeveloperProfile,
   } = useUIStore();
 
-  // Initialize Auth & Supabase event listener
+  // Initialize Auth & Supabase event listener once on boot
   useEffect(() => {
     initializeAuth();
   }, [initializeAuth]);
 
-  // Sync route on popstate (browser back / forward button)
+  // Sync UI route on popstate (browser back / forward button)
   const syncFromUrl = useCallback(() => {
     const route = getRouteFromPathname();
     if (route.isVerifyEmail || route.isAuthCallback) {
@@ -58,17 +71,19 @@ export function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, [syncFromUrl]);
 
-  // Sync tab/subPage state changes to URL
+  // Sync tab/subPage state changes to browser URL (only for normal app browsing)
   useEffect(() => {
     const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
-    if (isLoading || verificationStatus === 'INITIALIZING') return;
-    if (currentPath === '/auth/callback') return;
-    if (currentPath === '/verify-email') return;
+    if (isLoading || authState === 'INITIALIZING') return;
+    if (currentPath === '/auth/callback' || currentPath === '/verify-email') return;
 
-    if (verificationStatus === 'UNVERIFIED') {
-      if (window.location.pathname !== '/verify-email') {
-        window.history.replaceState(null, '', '/verify-email');
-      }
+    // Unverified users are kept on the verification gate
+    if (verificationStatus === 'UNVERIFIED' || (hasSession && !emailVerified)) {
+      return;
+    }
+
+    // Do not alter path if in first-visit intro
+    if (!introCompleted && !hasSession && currentPath === '/') {
       return;
     }
 
@@ -76,11 +91,11 @@ export function App() {
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath);
     }
-  }, [activeTab, subPage, verificationStatus, isLoading]);
+  }, [activeTab, subPage, verificationStatus, hasSession, emailVerified, introCompleted, isLoading, authState]);
 
-  // Desktop keyboard shortcuts (only active when verified / authenticated or guest browsing)
+  // Desktop keyboard shortcuts (active for verified users or guests)
   useEffect(() => {
-    if (verificationStatus === 'UNVERIFIED') return;
+    if (verificationStatus === 'UNVERIFIED' || (hasSession && !emailVerified)) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const isInputActive = ['INPUT', 'TEXTAREA', 'SELECT'].includes(
@@ -126,6 +141,8 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     verificationStatus,
+    hasSession,
+    emailVerified,
     openSearch,
     closeSubPage,
     buildModalOpen,
@@ -137,8 +154,8 @@ export function App() {
     subPage,
   ]);
 
-  // Loading State
-  if (isLoading || verificationStatus === 'INITIALIZING') {
+  // 1. BOOT LOADER
+  if (isLoading || authState === 'INITIALIZING') {
     return (
       <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center">
         <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
@@ -149,7 +166,7 @@ export function App() {
     );
   }
 
-  // 1. DEDICATED TOP-LEVEL ROUTES
+  // 2. DEDICATED TOP-LEVEL EXPLICIT ROUTES
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
   if (currentPath === '/auth/callback') {
     return <AuthCallbackPage />;
@@ -158,18 +175,25 @@ export function App() {
     return <VerifyEmailPage />;
   }
 
-  // 2. MANDATORY EMAIL VERIFICATION GATE FOR PROTECTED APPLICATION ACCESS
-  // An unverified user MUST NOT access Home, Discover, Projects, Profile, Notifications, etc.
-  if (verificationStatus === 'UNVERIFIED') {
+  // 3. UNVERIFIED EMAIL AUTHENTICATION GATE
+  // If user has a session but email is not confirmed, route strictly to VerifyEmailPage
+  if ((hasSession && !emailVerified) || verificationStatus === 'UNVERIFIED') {
     return <VerifyEmailPage />;
   }
 
-  // 3. Onboarding Gate (only for verified users who haven't completed onboarding)
-  if (!onboardingCompleted) {
-    return <Onboarding />;
+  // 4. FIRST VISIT INTRO SLIDES
+  // Only shown when: user has never completed intro, has no active session, and is on root path '/'
+  if (!introCompleted && !hasSession && currentPath === '/') {
+    return <FirstVisitIntro />;
   }
 
-  // 3. Authenticated / Standard Application Shell
+  // 5. PROFILE ONBOARDING GATE
+  // Only shown when: user is authenticated, email is verified, but profile specialization hasn't been chosen yet
+  if (hasSession && emailVerified && !profileOnboardingCompleted) {
+    return <ProfileOnboarding />;
+  }
+
+  // 6. MAIN APPLICATION SHELL (For verified authenticated users OR guests who completed intro)
   const renderContent = () => {
     if (subPage) {
       switch (subPage.type) {

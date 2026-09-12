@@ -4,10 +4,16 @@ import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 
 export const AuthModal: React.FC = () => {
-  const { authModalOpen, setAuthModalOpen, signIn, signUp, authError, clearError, isLoading } = useAuthStore();
+  const { authModalOpen, authModalMode, setAuthModalOpen, signIn, signUp, authError, clearError, isLoading } = useAuthStore();
   const { showToast } = useUIStore();
 
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup'>(authModalMode || 'signin');
+
+  React.useEffect(() => {
+    if (authModalOpen && authModalMode) {
+      setMode(authModalMode);
+    }
+  }, [authModalOpen, authModalMode]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');

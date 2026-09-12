@@ -13,6 +13,7 @@ import {
   LogIn,
 } from 'lucide-react';
 import { useAuthStore, DEFAULT_GUEST_USER } from '../stores/authStore';
+import { useAppStateStore } from '../stores/appStateStore';
 import { profileService } from '../services/profileService';
 import { supabase } from '../lib/supabase';
 import { CodeSocialLogo } from '../components/common/CodeSocialLogo';
@@ -28,16 +29,27 @@ export const VerifyEmailPage: React.FC = () => {
     unverifiedEmail,
     verificationMessage,
     isCheckingVerification,
-    resendCooldown,
     resendVerification,
     cancelVerification,
     setAuthModalOpen,
+    hasSession,
+    profileOnboardingCompleted,
   } = useAuthStore();
+
+  const { resendCooldownSeconds, updateCooldownTick } = useAppStateStore();
 
   const [isVerifying, setIsVerifying] = useState<boolean>(true);
   const [isConfirmed, setIsConfirmed] = useState<boolean>(false);
   const [confirmedEmail, setConfirmedEmail] = useState<string | null>(null);
   const [urlError, setUrlError] = useState<UrlErrorInfo | null>(null);
+
+  // Keep persistent cooldown tick updated
+  useEffect(() => {
+    const timer = setInterval(() => {
+      updateCooldownTick();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [updateCooldownTick]);
 
   // Parse error and token parameters from query string and hash fragment
   const inspectUrlAndVerify = useCallback(async () => {
@@ -52,7 +64,7 @@ export const VerifyEmailPage: React.FC = () => {
 
       // 1. Inspect URL search query params
       const searchParams = new URLSearchParams(window.location.search);
-      // 2. Inspect URL hash fragment (Supabase OAuth & Email confirmations often redirect with #access_token=... or #error=...)
+      // 2. Inspect URL hash fragment (Supabase OAuth & Email confirmations redirect with #access_token=... or #error=...)
       const rawHash = window.location.hash.startsWith('#')
         ? window.location.hash.substring(1)
         : window.location.hash;
@@ -79,36 +91,76 @@ export const VerifyEmailPage: React.FC = () => {
         return;
       }
 
-      // If PKCE code is provided in query params, exchange it
+      // Consume tokens across all 3 Supabase return formats:
+      // A) Implicit flow in URL hash (#access_token=...&refresh_token=...)
+      const accessToken = hashParams.get('access_token');
+      const refreshToken = hashParams.get('refresh_token');
+      if (accessToken && refreshToken) {
+        try {
+          await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+        } catch (hashErr) {
+          console.warn('Error setting session from URL hash tokens:', hashErr);
+        }
+      }
+
+      // B) PKCE code in query params (?code=...)
       const code = searchParams.get('code');
       if (code) {
         try {
           await supabase.auth.exchangeCodeForSession(code);
         } catch (exchangeErr: any) {
-          console.warn('PKCE exchange error (may have already been exchanged):', exchangeErr);
+          console.warn('PKCE exchange error:', exchangeErr);
         }
       }
 
-      // 3. Query current user and verification status directly from Supabase
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      // C) OTP token_hash in query params (?token_hash=...)
+      const tokenHash = searchParams.get('token_hash');
+      const otpType = (searchParams.get('type') as any) || 'signup';
+      if (tokenHash) {
+        try {
+          await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: otpType,
+          });
+        } catch (otpErr) {
+          console.warn('Error verifying OTP token_hash:', otpErr);
+        }
+      }
 
-      if (userError || !userData.user) {
-        // No active session yet
-        // Check if there was an unverified email stored in store
+      // Clean up sensitive tokens from the browser URL address bar while staying on /verify-email
+      if (accessToken || refreshToken || code || tokenHash) {
+        try {
+          window.history.replaceState(null, '', window.location.pathname);
+        } catch {}
+      }
+
+      // 3. Query current session and user directly from Supabase
+      const [sessionResult, userResult] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.auth.getUser(),
+      ]);
+
+      const session = sessionResult.data?.session || null;
+      const user = userResult.data?.user || session?.user || null;
+
+      if (!user) {
+        // No active session on this device
         setIsConfirmed(false);
         setConfirmedEmail(null);
         setIsVerifying(false);
         return;
       }
 
-      const user = userData.user;
       const confirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
 
       if (confirmed) {
         setIsConfirmed(true);
         setConfirmedEmail(user.email || null);
 
-        // Update profile & authStore state while strictly PRESERVING onboardingCompleted
+        // Fetch or create profile
         let profile = await profileService.getProfile(user.id);
         if (!profile) {
           const meta = user.user_metadata || {};
@@ -126,16 +178,26 @@ export const VerifyEmailPage: React.FC = () => {
           });
         }
 
-        const sessionResult = await supabase.auth.getSession();
+        const hasProfileSpecialty = Boolean(
+          profile.specialty && profile.techStack && profile.techStack.length > 0
+        );
+        const isProfileComplete =
+          useAuthStore.getState().profileOnboardingCompleted || hasProfileSpecialty;
+
+        // CRITICAL: Set user as fully authenticated WITHOUT artificially forcing profileOnboardingCompleted = true
         useAuthStore.setState({
-          session: sessionResult.data?.session || null,
+          session: session || null,
           currentUser: profile,
+          hasSession: true,
+          emailVerified: true,
+          profileOnboardingCompleted: isProfileComplete,
+          authState: 'VERIFIED_AUTHENTICATED',
           isAuthenticated: true,
           verificationStatus: 'VERIFIED',
+          onboardingCompleted: isProfileComplete,
           unverifiedEmail: null,
+          authModalOpen: false,
           githubConnected: !!profile.githubHandle,
-          // CRITICAL: Preserve existing onboardingCompleted state; never artificially force it true!
-          onboardingCompleted: useAuthStore.getState().onboardingCompleted,
           isLoading: false,
           verificationMessage: null,
         });
@@ -143,6 +205,10 @@ export const VerifyEmailPage: React.FC = () => {
         setIsConfirmed(false);
         setConfirmedEmail(null);
         useAuthStore.setState({
+          session: session || null,
+          hasSession: Boolean(session?.user),
+          emailVerified: false,
+          authState: session?.user ? 'UNVERIFIED_AUTHENTICATED' : 'UNAUTHENTICATED',
           isAuthenticated: false,
           verificationStatus: 'UNVERIFIED',
           unverifiedEmail: user.email || useAuthStore.getState().unverifiedEmail,
@@ -163,7 +229,7 @@ export const VerifyEmailPage: React.FC = () => {
   useEffect(() => {
     inspectUrlAndVerify();
 
-    // Listen for live Supabase auth state change (e.g. hash token exchange completes)
+    // Listen for live Supabase auth state change (e.g. email confirmed in another tab/device)
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         const confirmed = Boolean(
@@ -183,15 +249,18 @@ export const VerifyEmailPage: React.FC = () => {
   }, [inspectUrlAndVerify]);
 
   /**
-   * Navigates the user into CODE SOCIAL following the exact rule:
-   * - If onboardingCompleted is already true -> /home
-   * - Otherwise -> normal onboarding flow (/)
-   * - Never artificially set onboardingCompleted = true
+   * Navigates the verified user into the app.
+   * If profile onboarding has been completed, navigates to /home.
+   * Otherwise, navigates to / to complete profile onboarding.
+   * NEVER sets profileOnboardingCompleted = true here.
    */
   const handleContinueToApp = () => {
-    const isCompleted = useAuthStore.getState().onboardingCompleted;
-    const targetUrl = isCompleted ? '/home' : '/';
-    window.history.pushState(null, '', targetUrl);
+    const isCompleted = useAuthStore.getState().profileOnboardingCompleted;
+    if (isCompleted) {
+      window.history.pushState(null, '', '/home');
+    } else {
+      window.history.pushState(null, '', '/');
+    }
     window.dispatchEvent(new PopStateEvent('popstate'));
   };
 
@@ -200,7 +269,7 @@ export const VerifyEmailPage: React.FC = () => {
   };
 
   const handleResend = async () => {
-    if (resendCooldown > 0) return;
+    if (resendCooldownSeconds > 0) return;
     await resendVerification();
   };
 
@@ -321,25 +390,39 @@ export const VerifyEmailPage: React.FC = () => {
                       {confirmedEmail}
                     </span>
                   )}{' '}
-                  has been verified with Supabase. Your CODE SOCIAL account is now active.
+                  has been verified with Supabase.
                 </p>
               </div>
 
               <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/20 text-xs text-emerald-300/90 flex items-start gap-2.5">
                 <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
                 <span className="leading-relaxed">
-                  Verification verified. You can now access your developer profile, follow builders, and connect GitHub repositories.
+                  Your email is confirmed. You can now access your developer feed, follow builders, and connect GitHub repositories.
                 </span>
               </div>
 
               <div className="pt-2">
-                <button
-                  onClick={handleContinueToApp}
-                  className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wider uppercase transition-all shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span>Continue to CODE SOCIAL</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                {hasSession ? (
+                  <button
+                    onClick={handleContinueToApp}
+                    className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wider uppercase transition-all shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <span>
+                      {profileOnboardingCompleted
+                        ? 'Continue to CODE SOCIAL'
+                        : 'Personalize Your Profile'}
+                    </span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setAuthModalOpen(true, 'signin')}
+                    className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wider uppercase transition-all shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Sign In to Continue</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : unverifiedEmail ? (
@@ -415,13 +498,13 @@ export const VerifyEmailPage: React.FC = () => {
 
                 <button
                   onClick={handleResend}
-                  disabled={resendCooldown > 0 || isCheckingVerification}
+                  disabled={resendCooldownSeconds > 0 || isCheckingVerification}
                   className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 active:scale-[0.99] disabled:opacity-50 text-slate-200 hover:text-white font-medium text-xs border border-slate-700/80 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isCheckingVerification ? 'animate-spin' : ''}`} />
                   <span>
-                    {resendCooldown > 0
-                      ? `Resend available in ${resendCooldown}s`
+                    {resendCooldownSeconds > 0
+                      ? `Resend available in ${resendCooldownSeconds}s`
                       : 'Resend verification email'}
                   </span>
                 </button>
@@ -456,7 +539,7 @@ export const VerifyEmailPage: React.FC = () => {
 
               <div className="space-y-3 pt-2">
                 <button
-                  onClick={() => setAuthModalOpen(true)}
+                  onClick={() => setAuthModalOpen(true, 'signin')}
                   className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wider uppercase transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <LogIn className="w-4 h-4" />
@@ -480,7 +563,7 @@ export const VerifyEmailPage: React.FC = () => {
 
       {/* Footer */}
       <footer className="relative z-10 w-full max-w-5xl mx-auto px-6 py-4 text-center border-t border-slate-900 text-[11px] text-slate-600 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>CODE SOCIAL &bull; Real Supabase Auth Source of Truth</span>
+        <span>CODE SOCIAL &bull; Supabase Auth Source of Truth</span>
         <div className="flex items-center gap-2 text-slate-500">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
           <span>Live Auth Verification Listener Active</span>

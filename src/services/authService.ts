@@ -153,9 +153,51 @@ export const authService = {
   },
 
   /**
-   * Gets current session from storage / memory
+   * Gets current session from storage / memory, consuming URL auth tokens if present.
    */
   async getSession(): Promise<Session | null> {
+    if (typeof window !== 'undefined') {
+      try {
+        // 1. Process URL hash tokens (implicit flow: #access_token=...&refresh_token=...)
+        const rawHash = window.location.hash.startsWith('#')
+          ? window.location.hash.substring(1)
+          : window.location.hash;
+        if (rawHash.includes('access_token=')) {
+          const hashParams = new URLSearchParams(rawHash);
+          const accessToken = hashParams.get('access_token');
+          const refreshToken = hashParams.get('refresh_token');
+          if (accessToken && refreshToken) {
+            const { data } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (data.session) return data.session;
+          }
+        }
+
+        // 2. Process query params (PKCE code: ?code=...)
+        const searchParams = new URLSearchParams(window.location.search);
+        const code = searchParams.get('code');
+        if (code) {
+          const { data } = await supabase.auth.exchangeCodeForSession(code);
+          if (data.session) return data.session;
+        }
+
+        // 3. Process query params (OTP token_hash: ?token_hash=...)
+        const tokenHash = searchParams.get('token_hash');
+        const type = (searchParams.get('type') as any) || 'signup';
+        if (tokenHash) {
+          const { data } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type,
+          });
+          if (data.session) return data.session;
+        }
+      } catch (err) {
+        console.warn('Error processing URL auth tokens in getSession:', err);
+      }
+    }
+
     const { data, error } = await supabase.auth.getSession();
     if (error) {
       console.warn('Error fetching Supabase session:', error.message);

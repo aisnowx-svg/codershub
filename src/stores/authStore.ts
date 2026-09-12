@@ -1,15 +1,28 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Developer } from '../types';
+import { Session } from '@supabase/supabase-js';
+import { Developer, DeveloperSpecialty } from '../types';
 import { authService } from '../services/authService';
 import { profileService } from '../services/profileService';
-import { Session } from '@supabase/supabase-js';
+import { useAppStateStore } from './appStateStore';
 
-export type AuthVerificationStatus = 
-  | 'INITIALIZING'       // Checking initial session on boot
-  | 'NOT_AUTHENTICATED' // Logged out / guest
-  | 'UNVERIFIED'        // Account created or signed in, but email is unconfirmed
-  | 'VERIFIED';         // Authenticated and email_confirmed_at is confirmed
+export type AuthStateStatus =
+  | 'INITIALIZING'
+  | 'UNAUTHENTICATED'
+  | 'UNVERIFIED_AUTHENTICATED'
+  | 'VERIFIED_AUTHENTICATED';
+
+// Backwards compatibility for components expecting verificationStatus
+export type AuthVerificationStatus =
+  | 'INITIALIZING'
+  | 'NOT_AUTHENTICATED'
+  | 'UNVERIFIED'
+  | 'VERIFIED';
+
+export interface VerificationMessage {
+  type: 'success' | 'error' | 'info';
+  text: string;
+}
 
 export const DEFAULT_GUEST_USER: Developer = {
   id: '',
@@ -34,83 +47,99 @@ export const DEFAULT_GUEST_USER: Developer = {
   },
   currentlyBuilding: {
     projectId: '',
-    projectName: '',
-    description: '',
+    projectName: 'No Active Project',
+    description: 'Set your active project on your profile.',
     progressPercentage: 0,
-    latestMilestone: '',
+    latestMilestone: 'In development',
   },
-  techStack: ['TypeScript'],
+  techStack: ['TypeScript', 'React'],
   isFollowing: false,
 };
 
-interface VerificationMessage {
-  type: 'success' | 'error' | 'info';
-  text: string;
-}
-
-interface AuthState {
-  currentUser: Developer;
+interface AuthStoreState {
+  // Core Auth Dimensions
   session: Session | null;
+  currentUser: Developer;
+  hasSession: boolean;
+  emailVerified: boolean;
+  profileOnboardingCompleted: boolean;
+  authState: AuthStateStatus;
+
+  // Backwards-compatible aliases
   isAuthenticated: boolean;
+  verificationStatus: AuthVerificationStatus;
+  onboardingCompleted: boolean;
+
+  // UI & Feedback States
   isLoading: boolean;
   authError: string | null;
-  githubConnected: boolean;
-  onboardingCompleted: boolean;
   authModalOpen: boolean;
+  authModalMode: 'signin' | 'signup';
+  githubConnected: boolean;
 
-  // Email Verification State
-  verificationStatus: AuthVerificationStatus;
+  // Email Verification UI State
   unverifiedEmail: string | null;
   verificationMessage: VerificationMessage | null;
   isCheckingVerification: boolean;
-  resendCooldown: number;
+  isRateLimited: boolean;
+  resendCooldown: number; // Linked to appStateStore
 
   // Actions
   initializeAuth: () => Promise<void>;
-  setAuthModalOpen: (open: boolean) => void;
+  setAuthModalOpen: (open: boolean, mode?: 'signin' | 'signup') => void;
+  clearError: () => void;
+  setUnverifiedEmail: (email: string) => void;
+  clearVerificationMessage: () => void;
   signIn: (email: string, pass: string) => Promise<boolean>;
   signUp: (email: string, pass: string, username: string, displayName: string) => Promise<boolean>;
   signOut: () => Promise<void>;
-  checkVerification: () => Promise<{ verified: boolean; message?: string }>;
+  checkVerification: () => Promise<{ verified: boolean; requiresSignIn?: boolean; email?: string; message?: string }>;
   resendVerification: () => Promise<boolean>;
   cancelVerification: () => Promise<void>;
-  setUnverifiedEmail: (email: string) => void;
-  clearVerificationMessage: () => void;
-  connectGithub: (handle?: string) => Promise<void>;
-  disconnectGithub: () => Promise<void>;
   completeOnboarding: (specialties: string[], techStack: string[]) => Promise<void>;
   updateProfile: (partial: Partial<Developer>) => Promise<void>;
-  clearError: () => void;
+  connectGithub: (handle?: string) => Promise<void>;
+  disconnectGithub: () => Promise<void>;
 }
 
-let resendTimer: number | null = null;
-
-export const useAuthStore = create<AuthState>()(
+export const useAuthStore = create<AuthStoreState>()(
   persist(
     (set, get) => ({
-      currentUser: DEFAULT_GUEST_USER,
       session: null,
+      currentUser: DEFAULT_GUEST_USER,
+      hasSession: false,
+      emailVerified: false,
+      profileOnboardingCompleted: false,
+      authState: 'INITIALIZING',
+
+      // Aliases
       isAuthenticated: false,
+      verificationStatus: 'INITIALIZING',
+      onboardingCompleted: false,
+
       isLoading: true,
       authError: null,
-      githubConnected: false,
-      onboardingCompleted: false,
       authModalOpen: false,
+      authModalMode: 'signin',
+      githubConnected: false,
 
-      verificationStatus: 'INITIALIZING',
       unverifiedEmail: null,
       verificationMessage: null,
       isCheckingVerification: false,
+      isRateLimited: false,
       resendCooldown: 0,
 
-      setAuthModalOpen: (open) => set({ authModalOpen: open, authError: null }),
-      clearError: () => set({ authError: null }),
+      setAuthModalOpen: (open, mode = 'signin') => {
+        set({ authModalOpen: open, authModalMode: mode, authError: null });
+      },
+
+      clearError: () => set({ authError: null, isRateLimited: false }),
       setUnverifiedEmail: (email) => set({ unverifiedEmail: email }),
       clearVerificationMessage: () => set({ verificationMessage: null }),
 
       initializeAuth: async () => {
         try {
-          set({ isLoading: true, verificationStatus: 'INITIALIZING' });
+          set({ isLoading: true, authState: 'INITIALIZING', verificationStatus: 'INITIALIZING' });
           const session = await authService.getSession();
 
           if (session?.user) {
@@ -119,15 +148,20 @@ export const useAuthStore = create<AuthState>()(
             );
 
             if (!isConfirmed) {
+              // Valid session exists, but email is not yet confirmed
               set({
                 session,
                 currentUser: DEFAULT_GUEST_USER,
+                hasSession: true,
+                emailVerified: false,
+                authState: 'UNVERIFIED_AUTHENTICATED',
                 isAuthenticated: false,
                 verificationStatus: 'UNVERIFIED',
                 unverifiedEmail: session.user.email || get().unverifiedEmail,
                 isLoading: false,
               });
             } else {
+              // Valid session and email is verified
               let profile = await profileService.getProfile(session.user.id);
               if (!profile) {
                 const meta = session.user.user_metadata || {};
@@ -145,29 +179,43 @@ export const useAuthStore = create<AuthState>()(
                 });
               }
 
+              const hasProfileSpecialty = Boolean(
+                profile.specialty && profile.techStack && profile.techStack.length > 0
+              );
+              const profileCompleted = get().profileOnboardingCompleted || hasProfileSpecialty;
+
               set({
                 session,
                 currentUser: profile,
+                hasSession: true,
+                emailVerified: true,
+                profileOnboardingCompleted: profileCompleted,
+                authState: 'VERIFIED_AUTHENTICATED',
                 isAuthenticated: true,
                 verificationStatus: 'VERIFIED',
+                onboardingCompleted: profileCompleted,
                 unverifiedEmail: null,
-                githubConnected: !!profile.githubHandle,
-                onboardingCompleted: get().onboardingCompleted,
+                authModalOpen: false,
+                githubConnected: Boolean(profile.githubHandle),
                 isLoading: false,
               });
             }
           } else {
-            const currentUnverified = get().unverifiedEmail;
+            // No session
+            const storedEmail = get().unverifiedEmail;
             set({
               session: null,
               currentUser: DEFAULT_GUEST_USER,
+              hasSession: false,
+              emailVerified: false,
+              authState: 'UNAUTHENTICATED',
               isAuthenticated: false,
-              verificationStatus: currentUnverified ? 'UNVERIFIED' : 'NOT_AUTHENTICATED',
+              verificationStatus: storedEmail ? 'UNVERIFIED' : 'NOT_AUTHENTICATED',
               isLoading: false,
             });
           }
 
-          // Subscribe to live auth state changes (e.g. email verification redirect back)
+          // Live Supabase auth event listener (ZERO rogue redirects)
           authService.onAuthStateChange(async (_event, newSession) => {
             if (newSession?.user) {
               const isConfirmed = Boolean(
@@ -192,14 +240,24 @@ export const useAuthStore = create<AuthState>()(
                   });
                 }
 
+                const hasProfileSpecialty = Boolean(
+                  profile.specialty && profile.techStack && profile.techStack.length > 0
+                );
+                const profileCompleted = get().profileOnboardingCompleted || hasProfileSpecialty;
+
                 set({
                   session: newSession,
                   currentUser: profile,
+                  hasSession: true,
+                  emailVerified: true,
+                  profileOnboardingCompleted: profileCompleted,
+                  authState: 'VERIFIED_AUTHENTICATED',
                   isAuthenticated: true,
                   verificationStatus: 'VERIFIED',
+                  onboardingCompleted: profileCompleted,
                   unverifiedEmail: null,
-                  githubConnected: !!profile.githubHandle,
-                  onboardingCompleted: get().onboardingCompleted,
+                  authModalOpen: false,
+                  githubConnected: Boolean(profile.githubHandle),
                   isLoading: false,
                   verificationMessage: null,
                 });
@@ -207,6 +265,9 @@ export const useAuthStore = create<AuthState>()(
                 set({
                   session: newSession,
                   currentUser: DEFAULT_GUEST_USER,
+                  hasSession: true,
+                  emailVerified: false,
+                  authState: 'UNVERIFIED_AUTHENTICATED',
                   isAuthenticated: false,
                   verificationStatus: 'UNVERIFIED',
                   unverifiedEmail: newSession.user.email || get().unverifiedEmail,
@@ -214,28 +275,38 @@ export const useAuthStore = create<AuthState>()(
                 });
               }
             } else {
-              const currentUnverified = get().unverifiedEmail;
+              const storedEmail = get().unverifiedEmail;
               set({
                 session: null,
                 currentUser: DEFAULT_GUEST_USER,
+                hasSession: false,
+                emailVerified: false,
+                authState: 'UNAUTHENTICATED',
                 isAuthenticated: false,
-                verificationStatus: currentUnverified ? 'UNVERIFIED' : 'NOT_AUTHENTICATED',
+                verificationStatus: storedEmail ? 'UNVERIFIED' : 'NOT_AUTHENTICATED',
                 isLoading: false,
               });
             }
           });
         } catch (err: any) {
           console.error('Auth initialization error:', err);
-          set({ isLoading: false, verificationStatus: 'NOT_AUTHENTICATED' });
+          set({
+            isLoading: false,
+            hasSession: false,
+            emailVerified: false,
+            authState: 'UNAUTHENTICATED',
+            isAuthenticated: false,
+            verificationStatus: 'NOT_AUTHENTICATED',
+          });
         }
       },
 
       signIn: async (email: string, pass: string) => {
         try {
-          set({ isLoading: true, authError: null });
+          set({ isLoading: true, authError: null, isRateLimited: false });
           const { session, user } = await authService.signIn(email, pass);
 
-          if (!user) throw new Error('Failed to sign in');
+          if (!user) throw new Error('Failed to retrieve user upon sign in');
 
           const isConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
 
@@ -243,20 +314,21 @@ export const useAuthStore = create<AuthState>()(
             set({
               session,
               currentUser: DEFAULT_GUEST_USER,
+              hasSession: true,
+              emailVerified: false,
+              authState: 'UNVERIFIED_AUTHENTICATED',
               isAuthenticated: false,
               verificationStatus: 'UNVERIFIED',
               unverifiedEmail: email.trim(),
               authModalOpen: false,
               isLoading: false,
               authError: null,
-              verificationMessage: null,
+              verificationMessage: {
+                type: 'info',
+                text: 'Please confirm your email address before entering CODE SOCIAL.',
+              },
             });
-
-            if (typeof window !== 'undefined') {
-              window.history.replaceState(null, '', '/verify-email');
-            }
-
-            return false;
+            return true;
           }
 
           let profile = await profileService.getProfile(user.id);
@@ -274,13 +346,22 @@ export const useAuthStore = create<AuthState>()(
             });
           }
 
+          const hasProfileSpecialty = Boolean(
+            profile.specialty && profile.techStack && profile.techStack.length > 0
+          );
+          const profileCompleted = get().profileOnboardingCompleted || hasProfileSpecialty;
+
           set({
             session,
             currentUser: profile,
+            hasSession: true,
+            emailVerified: true,
+            profileOnboardingCompleted: profileCompleted,
+            authState: 'VERIFIED_AUTHENTICATED',
             isAuthenticated: true,
             verificationStatus: 'VERIFIED',
+            onboardingCompleted: profileCompleted,
             unverifiedEmail: null,
-            onboardingCompleted: true,
             authModalOpen: false,
             isLoading: false,
             authError: null,
@@ -293,6 +374,10 @@ export const useAuthStore = create<AuthState>()(
           if (errorMsg.toLowerCase().includes('email not confirmed')) {
             set({
               authError: null,
+              hasSession: false,
+              emailVerified: false,
+              authState: 'UNAUTHENTICATED',
+              isAuthenticated: false,
               verificationStatus: 'UNVERIFIED',
               unverifiedEmail: email.trim(),
               authModalOpen: false,
@@ -302,11 +387,7 @@ export const useAuthStore = create<AuthState>()(
                 text: 'Please verify your email before continuing.',
               },
             });
-
-            if (typeof window !== 'undefined') {
-              window.history.replaceState(null, '', '/verify-email');
-            }
-            return false;
+            return true;
           }
 
           set({ authError: errorMsg, isLoading: false });
@@ -316,7 +397,7 @@ export const useAuthStore = create<AuthState>()(
 
       signUp: async (email: string, pass: string, username: string, displayName: string) => {
         try {
-          set({ isLoading: true, authError: null });
+          set({ isLoading: true, authError: null, isRateLimited: false });
           const cleanHandle = username.trim().replace(/^@/, '');
           const { user, session } = await authService.signUp(email, pass, {
             username: cleanHandle,
@@ -329,11 +410,12 @@ export const useAuthStore = create<AuthState>()(
           const isConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
 
           if (!isConfirmed) {
-            // DO NOT treat signup as a successful login!
-            // Show dedicated email verification screen
             set({
-              session: null,
+              session: session || null,
               currentUser: DEFAULT_GUEST_USER,
+              hasSession: Boolean(session?.user),
+              emailVerified: false,
+              authState: session?.user ? 'UNVERIFIED_AUTHENTICATED' : 'UNAUTHENTICATED',
               isAuthenticated: false,
               verificationStatus: 'UNVERIFIED',
               unverifiedEmail: email.trim(),
@@ -343,14 +425,12 @@ export const useAuthStore = create<AuthState>()(
               verificationMessage: null,
             });
 
-            if (typeof window !== 'undefined') {
-              window.history.replaceState(null, '', '/verify-email');
-            }
-
+            // Start initial 60s cooldown for resend button
+            useAppStateStore.getState().startResendCooldown(60);
             return true;
           }
 
-          // In case email confirmation is already fulfilled
+          // In rare cases where email confirmation is disabled/instant
           let profile = await profileService.getProfile(user.id);
           if (!profile) {
             profile = await profileService.upsertProfile({
@@ -368,10 +448,14 @@ export const useAuthStore = create<AuthState>()(
           set({
             session,
             currentUser: profile,
+            hasSession: true,
+            emailVerified: true,
+            profileOnboardingCompleted: false, // Must complete profile setup next
+            authState: 'VERIFIED_AUTHENTICATED',
             isAuthenticated: true,
             verificationStatus: 'VERIFIED',
+            onboardingCompleted: false,
             unverifiedEmail: null,
-            onboardingCompleted: get().onboardingCompleted,
             authModalOpen: false,
             isLoading: false,
             authError: null,
@@ -379,7 +463,15 @@ export const useAuthStore = create<AuthState>()(
 
           return true;
         } catch (err: any) {
-          set({ authError: err.message || 'Registration error', isLoading: false });
+          const msg = err.message || 'Registration error';
+          const isRate = msg.toLowerCase().includes('rate') || msg.toLowerCase().includes('limit');
+          set({
+            authError: isRate
+              ? 'Email sending rate limit exceeded by Supabase. Please wait a few minutes before trying again.'
+              : msg,
+            isRateLimited: isRate,
+            isLoading: false,
+          });
           return false;
         }
       },
@@ -387,7 +479,6 @@ export const useAuthStore = create<AuthState>()(
       checkVerification: async () => {
         try {
           set({ isCheckingVerification: true, verificationMessage: null });
-          // PERFORM FRESH CHECK DIRECTLY AGAINST SUPABASE
           const { isVerified, user } = await authService.checkUserVerification();
 
           if (isVerified && user) {
@@ -409,14 +500,24 @@ export const useAuthStore = create<AuthState>()(
               });
             }
 
+            const hasProfileSpecialty = Boolean(
+              profile.specialty && profile.techStack && profile.techStack.length > 0
+            );
+            const profileCompleted = get().profileOnboardingCompleted || hasProfileSpecialty;
+
             set({
               session: session || null,
               currentUser: profile,
+              hasSession: true,
+              emailVerified: true,
+              profileOnboardingCompleted: profileCompleted,
+              authState: 'VERIFIED_AUTHENTICATED',
               isAuthenticated: true,
               verificationStatus: 'VERIFIED',
+              onboardingCompleted: profileCompleted,
               unverifiedEmail: null,
+              authModalOpen: false,
               isCheckingVerification: false,
-              onboardingCompleted: get().onboardingCompleted,
               verificationMessage: {
                 type: 'success',
                 text: 'Email verified! Welcome to CODE SOCIAL.',
@@ -424,8 +525,24 @@ export const useAuthStore = create<AuthState>()(
             });
 
             return { verified: true };
+          } else if (!user) {
+            // CROSS-DEVICE SCENARIO: No active session on this device
+            set({
+              isCheckingVerification: false,
+              verificationMessage: {
+                type: 'info',
+                text: 'Your email may already be confirmed. Please sign in to continue.',
+              },
+            });
+            return {
+              verified: false,
+              requiresSignIn: true,
+              email: get().unverifiedEmail || undefined,
+              message: 'Your email may already be confirmed. Please sign in to continue.',
+            };
           } else {
-            const message = "Your email hasn't been verified yet. Please click the link in your email.";
+            // Session exists, but email_confirmed_at is still null
+            const message = "Your email hasn't been verified yet. Please click the link sent to your inbox.";
             set({
               isCheckingVerification: false,
               verificationMessage: {
@@ -436,7 +553,7 @@ export const useAuthStore = create<AuthState>()(
             return { verified: false, message };
           }
         } catch (err: any) {
-          const message = err.message || "Failed to check verification status. Please try again.";
+          const message = err.message || 'Failed to check verification status. Please try again.';
           set({
             isCheckingVerification: false,
             verificationMessage: {
@@ -449,7 +566,13 @@ export const useAuthStore = create<AuthState>()(
       },
 
       resendVerification: async () => {
-        const { unverifiedEmail, resendCooldown } = get();
+        const { unverifiedEmail } = get();
+        const appStore = useAppStateStore.getState();
+
+        if (appStore.isResending || appStore.resendCooldownSeconds > 0) {
+          return false;
+        }
+
         if (!unverifiedEmail) {
           set({
             verificationMessage: {
@@ -460,74 +583,61 @@ export const useAuthStore = create<AuthState>()(
           return false;
         }
 
-        if (resendCooldown > 0) {
-          return false;
-        }
+        appStore.setIsResending(true);
+        set({ verificationMessage: null, isRateLimited: false });
 
         try {
-          set({ isCheckingVerification: true });
           await authService.resendVerificationEmail(unverifiedEmail);
+          appStore.startResendCooldown(60);
           set({
-            isCheckingVerification: false,
-            resendCooldown: 60,
             verificationMessage: {
               type: 'success',
-              text: 'Verification email sent.',
+              text: `Verification email resent to ${unverifiedEmail}. Check your inbox or spam folder.`,
             },
           });
-
-          if (resendTimer) {
-            window.clearInterval(resendTimer);
-          }
-
-          resendTimer = window.setInterval(() => {
-            const current = get().resendCooldown;
-            if (current <= 1) {
-              if (resendTimer) window.clearInterval(resendTimer);
-              resendTimer = null;
-              set({ resendCooldown: 0 });
-            } else {
-              set({ resendCooldown: current - 1 });
-            }
-          }, 1000);
-
           return true;
         } catch (err: any) {
+          const msg = err.message || 'Failed to resend verification email.';
+          const isRate = msg.toLowerCase().includes('rate') || msg.toLowerCase().includes('limit');
           set({
-            isCheckingVerification: false,
+            isRateLimited: isRate,
             verificationMessage: {
               type: 'error',
-              text: err.message || 'Failed to resend verification email.',
+              text: isRate
+                ? 'Email rate limit reached for this project. Please wait a few minutes before trying again.'
+                : msg,
             },
           });
+          if (isRate) {
+            appStore.startResendCooldown(120);
+          }
           return false;
+        } finally {
+          appStore.setIsResending(false);
         }
       },
 
       cancelVerification: async () => {
-        try {
-          await authService.signOut();
-        } catch (_) {}
-
-        if (resendTimer) {
-          window.clearInterval(resendTimer);
-          resendTimer = null;
+        const { unverifiedEmail } = get();
+        if (unverifiedEmail) {
+          try {
+            await authService.signOut();
+          } catch {
+            // Ignore sign out errors on cancel
+          }
         }
-
         set({
           session: null,
           currentUser: DEFAULT_GUEST_USER,
+          hasSession: false,
+          emailVerified: false,
+          authState: 'UNAUTHENTICATED',
           isAuthenticated: false,
           verificationStatus: 'NOT_AUTHENTICATED',
           unverifiedEmail: null,
           verificationMessage: null,
-          resendCooldown: 0,
-          authModalOpen: true,
+          authModalOpen: false,
         });
-
-        if (typeof window !== 'undefined') {
-          window.history.replaceState(null, '', '/');
-        }
       },
 
       signOut: async () => {
@@ -537,17 +647,19 @@ export const useAuthStore = create<AuthState>()(
           set({
             session: null,
             currentUser: DEFAULT_GUEST_USER,
+            hasSession: false,
+            emailVerified: false,
+            authState: 'UNAUTHENTICATED',
             isAuthenticated: false,
             verificationStatus: 'NOT_AUTHENTICATED',
             unverifiedEmail: null,
             verificationMessage: null,
+            profileOnboardingCompleted: false,
             onboardingCompleted: false,
             isLoading: false,
             authError: null,
+            authModalOpen: false,
           });
-          if (typeof window !== 'undefined') {
-            window.history.replaceState(null, '', '/');
-          }
         } catch (err: any) {
           console.error('Sign out error:', err);
           set({ isLoading: false });
@@ -587,7 +699,7 @@ export const useAuthStore = create<AuthState>()(
 
       completeOnboarding: async (specialties, techStack) => {
         const { currentUser } = get();
-        const specialty = (specialties[0] as any) || 'Systems';
+        const specialty = (specialties[0] as DeveloperSpecialty) || 'Systems';
         const mergedStack = Array.from(new Set([...currentUser.techStack, ...techStack]));
 
         if (currentUser.id) {
@@ -598,6 +710,7 @@ export const useAuthStore = create<AuthState>()(
         }
 
         set((state) => ({
+          profileOnboardingCompleted: true,
           onboardingCompleted: true,
           currentUser: {
             ...state.currentUser,
@@ -623,9 +736,10 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: 'code-social-auth-storage-v5',
+      name: 'code-social-auth-storage-v6',
       partialize: (state) => ({
-        onboardingCompleted: state.onboardingCompleted,
+        profileOnboardingCompleted: state.profileOnboardingCompleted,
+        onboardingCompleted: state.profileOnboardingCompleted,
         unverifiedEmail: state.unverifiedEmail,
       }),
     }
