@@ -93,7 +93,7 @@ export const BuildLogCard: React.FC<BuildLogCardProps> = ({ log }) => {
   };
 
   return (
-    <article className="w-full bg-white border border-slate-200/80 rounded-2xl p-6 text-left shadow-soft hover:shadow-soft-hover transition-all">
+    <article className="w-full bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-6 text-left shadow-soft hover:shadow-soft-hover transition-all">
       {/* 1. Author Info, Project context, and DAY badge */}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="flex items-center gap-3.5">

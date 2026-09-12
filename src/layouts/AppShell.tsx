@@ -2,6 +2,7 @@ import React from 'react';
 import { useUIStore } from '../stores/uiStore';
 import { TopHeader } from './TopHeader';
 import { DesktopSidebar } from './DesktopSidebar';
+import { MobileNav } from './MobileNav';
 import { BuildModal } from '../components/modals/BuildModal';
 import { ForkModal } from '../components/modals/ForkModal';
 import { JoinProjectModal } from '../components/modals/JoinProjectModal';
@@ -17,7 +18,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
   return (
     <div className="h-screen w-screen bg-dev-bg text-slate-900 flex overflow-hidden font-sans">
-      {/* 1. Primary Left Sidebar */}
+      {/* 1. Primary Left Sidebar (Desktop only) */}
       <DesktopSidebar />
 
       {/* 2. Main Content Column */}
@@ -25,13 +26,16 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* Top Context & Search Bar */}
         <TopHeader />
 
-        {/* Center Main Workspace (Airy, generous breathing room - not a crowded 3-column) */}
-        <main className="flex-1 overflow-y-auto bg-dev-bg">
-          <div className="max-w-4xl mx-auto px-8 py-8 pb-24">
+        {/* Center Main Workspace */}
+        <main className="flex-1 overflow-y-auto bg-dev-bg overscroll-contain">
+          <div className="max-w-4xl mx-auto px-3.5 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 pb-28 md:pb-24">
             {children}
           </div>
         </main>
       </div>
+
+      {/* 3. Mobile Bottom Navigation Bar (Mobile only) */}
+      <MobileNav />
 
       {/* Global Action Modals */}
       <BuildModal />

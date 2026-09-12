@@ -59,7 +59,7 @@ export const Discover: React.FC = () => {
       </div>
 
       {/* 2. Simple Segmented Controls (Builders / Projects / Technologies) */}
-      <div className="flex items-center justify-between border-b border-slate-200/80 pb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/80 pb-3">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setTab('builders')}

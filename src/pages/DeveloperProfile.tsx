@@ -214,17 +214,17 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
       )}
 
       {/* 1. Clean Profile Header Card */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-7 shadow-soft">
-        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-5">
-          <div className="flex items-center gap-4">
+      <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-7 shadow-soft">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-5">
+          <div className="flex items-start gap-3.5 sm:gap-4">
             <img
               src={developer.avatar}
               alt={developer.name}
-              className="w-18 h-18 rounded-full object-cover border-2 border-slate-100 shadow-sm"
+              className="w-14 h-14 sm:w-18 sm:h-18 rounded-full object-cover border-2 border-slate-100 shadow-sm shrink-0"
             />
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-xl font-bold tracking-tight text-slate-900 font-sans">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 font-sans">
                   {developer.name}
                 </h1>
                 <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
@@ -237,23 +237,23 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
                   href={`https://github.com/${developer.githubHandle}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 mt-1 transition-colors"
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 mt-1 transition-colors truncate max-w-full"
                 >
-                  <GithubIcon className="w-3.5 h-3.5 text-slate-600" />
-                  <span>github.com/{developer.githubHandle}</span>
+                  <GithubIcon className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                  <span className="truncate">github.com/{developer.githubHandle}</span>
                 </a>
               )}
               <p className="text-xs text-slate-600 mt-1 font-medium">{developer.role}</p>
               {developer.location && (
                 <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-1">
-                  <MapPin className="w-3.5 h-3.5" />
+                  <MapPin className="w-3.5 h-3.5 shrink-0" />
                   <span>{developer.location}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
             {isSelf ? (
               <>
                 {!account ? (
@@ -330,7 +330,7 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
 
       {/* GitHub App Integration Section */}
       {isSelf && (
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-soft space-y-4">
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-6 shadow-soft space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shadow-xs">

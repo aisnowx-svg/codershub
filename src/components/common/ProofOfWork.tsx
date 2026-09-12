@@ -53,13 +53,15 @@ export const ProofOfWork: React.FC<ProofOfWorkProps> = ({ stats, title = 'PROOF 
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
         {items.map((item, idx) => {
           const Icon = item.icon;
           return (
             <div
               key={idx}
-              className="bg-slate-50/70 hover:bg-slate-50 transition-colors rounded-xl p-3.5 border border-slate-100 flex flex-col justify-between"
+              className={`bg-slate-50/70 hover:bg-slate-50 transition-colors rounded-xl p-3 sm:p-3.5 border border-slate-100 flex flex-col justify-between ${
+                idx === 4 ? 'col-span-2 sm:col-span-1' : ''
+              }`}
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-slate-500 font-medium">{item.label}</span>

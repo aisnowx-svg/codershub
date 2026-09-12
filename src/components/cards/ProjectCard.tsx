@@ -31,7 +31,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({ project }) => {
   return (
     <div
       onClick={() => openProjectPage(project.id)}
-      className="bg-white hover:border-slate-300 border border-slate-200/80 rounded-2xl p-6 text-left cursor-pointer group shadow-soft hover:shadow-soft-hover transition-all relative overflow-hidden"
+      className="bg-white hover:border-slate-300 border border-slate-200/80 rounded-2xl p-4 sm:p-6 text-left cursor-pointer group shadow-soft hover:shadow-soft-hover transition-all relative overflow-hidden"
     >
       {/* Top row */}
       <div className="flex items-start justify-between gap-3 mb-3">

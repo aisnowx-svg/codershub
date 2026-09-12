@@ -47,7 +47,7 @@ export const DesktopSidebar: React.FC = () => {
 
   return (
     <aside
-      className={`bg-white border-r border-slate-200/80 flex flex-col h-full shrink-0 select-none transition-all duration-300 ease-in-out relative z-40 ${
+      className={`hidden md:flex bg-white border-r border-slate-200/80 flex-col h-full shrink-0 select-none transition-all duration-300 ease-in-out relative z-40 ${
         sidebarCollapsed ? 'w-[72px]' : 'w-64'
       }`}
     >
