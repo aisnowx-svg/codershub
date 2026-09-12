@@ -256,6 +256,21 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
           <div className="flex items-center gap-2">
             {isSelf ? (
               <>
+                {!account ? (
+                  <button
+                    onClick={() => startConnect()}
+                    disabled={isConnecting}
+                    className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-98 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-60"
+                  >
+                    <GithubIcon className="w-3.5 h-3.5 text-white" />
+                    <span>{isConnecting ? 'Connecting...' : 'Connect GitHub'}</span>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>@{account.githubUsername}</span>
+                  </div>
+                )}
                 <button
                   onClick={openEditModal}
                   className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
@@ -683,20 +698,81 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
                 />
               </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  GitHub Handle
+              <div className="space-y-2">
+                <label className="block text-[11px] font-semibold text-slate-700 uppercase tracking-wider">
+                  GitHub Integration
                 </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2 text-xs text-slate-400">@</span>
-                  <input
-                    type="text"
-                    value={editGithubHandle}
-                    onChange={(e) => setEditGithubHandle(e.target.value)}
-                    placeholder="octocat"
-                    className="w-full pl-7 pr-3 py-2 text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 border border-slate-200 rounded-xl"
-                  />
-                </div>
+
+                {account ? (
+                  <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src={account.avatarUrl}
+                        alt={account.githubUsername}
+                        className="w-8 h-8 rounded-full border border-emerald-200"
+                      />
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-900 font-mono">@{account.githubUsername}</span>
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            Connected
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono">DevQuro GitHub App Verified</p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (window.confirm('Disconnect your GitHub account?')) {
+                          await disconnectAccount(currentUser.id);
+                          setEditGithubHandle('');
+                          showToast('GitHub disconnected');
+                        }
+                      }}
+                      className="text-[11px] font-semibold text-red-600 hover:text-red-700 cursor-pointer"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-800">DevQuro GitHub OAuth</p>
+                        <p className="text-[11px] text-slate-500">Connect via OAuth to verify repositories & commits automatically.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditModalOpen(false);
+                          startConnect();
+                        }}
+                        disabled={isConnecting}
+                        className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-98 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                      >
+                        <GithubIcon className="w-3.5 h-3.5 text-white" />
+                        <span>{isConnecting ? 'Connecting...' : 'Connect GitHub'}</span>
+                      </button>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-200/60">
+                      <span className="block text-[10px] font-medium text-slate-500 mb-1">Or manual username fallback:</span>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2 text-xs text-slate-400">@</span>
+                        <input
+                          type="text"
+                          value={editGithubHandle}
+                          onChange={(e) => setEditGithubHandle(e.target.value)}
+                          placeholder="octocat"
+                          className="w-full pl-7 pr-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 border border-slate-200 rounded-xl font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
