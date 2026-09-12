@@ -24,6 +24,12 @@ export interface VerificationMessage {
   text: string;
 }
 
+export interface RequestState {
+  inFlight: boolean;
+  error: string | null;
+  isRateLimited?: boolean;
+}
+
 export const DEFAULT_GUEST_USER: Developer = {
   id: '',
   name: 'Builder',
@@ -56,6 +62,11 @@ export const DEFAULT_GUEST_USER: Developer = {
   isFollowing: false,
 };
 
+// Module-level in-flight locks to strictly block concurrent duplicate executions
+let signupLock = false;
+let signinLock = false;
+let resendLock = false;
+
 interface AuthStoreState {
   // Core Auth Dimensions
   session: Session | null;
@@ -77,6 +88,11 @@ interface AuthStoreState {
   authModalMode: 'signin' | 'signup';
   githubConnected: boolean;
 
+  // Action-Scoped Request States (Guarantees zero cross-action error leakage)
+  signinRequest: RequestState;
+  signupRequest: RequestState;
+  resendRequest: RequestState;
+
   // Email Verification UI State
   unverifiedEmail: string | null;
   verificationMessage: VerificationMessage | null;
@@ -88,6 +104,10 @@ interface AuthStoreState {
   initializeAuth: () => Promise<void>;
   setAuthModalOpen: (open: boolean, mode?: 'signin' | 'signup') => void;
   clearError: () => void;
+  clearSigninError: () => void;
+  clearSignupError: () => void;
+  clearResendError: () => void;
+  clearAllAuthErrors: () => void;
   setUnverifiedEmail: (email: string) => void;
   clearVerificationMessage: () => void;
   signIn: (email: string, pass: string) => Promise<boolean>;
@@ -123,17 +143,67 @@ export const useAuthStore = create<AuthStoreState>()(
       authModalMode: 'signin',
       githubConnected: false,
 
+      // Isolated Request States
+      signinRequest: { inFlight: false, error: null },
+      signupRequest: { inFlight: false, error: null, isRateLimited: false },
+      resendRequest: { inFlight: false, error: null, isRateLimited: false },
+
       unverifiedEmail: null,
       verificationMessage: null,
       isCheckingVerification: false,
       isRateLimited: false,
       resendCooldown: 0,
 
+      // Opening modal is 100% UI-only and ALWAYS starts clean
       setAuthModalOpen: (open, mode = 'signin') => {
-        set({ authModalOpen: open, authModalMode: mode, authError: null });
+        set({
+          authModalOpen: open,
+          authModalMode: mode,
+          authError: null,
+          isRateLimited: false,
+          signinRequest: { inFlight: false, error: null },
+          signupRequest: { inFlight: false, error: null, isRateLimited: false },
+        });
       },
 
-      clearError: () => set({ authError: null, isRateLimited: false }),
+      clearError: () =>
+        set({
+          authError: null,
+          isRateLimited: false,
+          signinRequest: { inFlight: false, error: null },
+          signupRequest: { inFlight: false, error: null, isRateLimited: false },
+          resendRequest: { inFlight: false, error: null, isRateLimited: false },
+        }),
+
+      clearSigninError: () =>
+        set({
+          signinRequest: { inFlight: false, error: null },
+          authError: null,
+        }),
+
+      clearSignupError: () =>
+        set({
+          signupRequest: { inFlight: false, error: null, isRateLimited: false },
+          authError: null,
+          isRateLimited: false,
+        }),
+
+      clearResendError: () =>
+        set({
+          resendRequest: { inFlight: false, error: null, isRateLimited: false },
+          verificationMessage: null,
+        }),
+
+      clearAllAuthErrors: () =>
+        set({
+          authError: null,
+          isRateLimited: false,
+          signinRequest: { inFlight: false, error: null },
+          signupRequest: { inFlight: false, error: null, isRateLimited: false },
+          resendRequest: { inFlight: false, error: null, isRateLimited: false },
+          verificationMessage: null,
+        }),
+
       setUnverifiedEmail: (email) => set({ unverifiedEmail: email }),
       clearVerificationMessage: () => set({ verificationMessage: null }),
 
@@ -215,7 +285,7 @@ export const useAuthStore = create<AuthStoreState>()(
             });
           }
 
-          // Live Supabase auth event listener (ZERO rogue redirects)
+          // Live Supabase auth event listener
           authService.onAuthStateChange(async (_event, newSession) => {
             if (newSession?.user) {
               const isConfirmed = Boolean(
@@ -302,8 +372,19 @@ export const useAuthStore = create<AuthStoreState>()(
       },
 
       signIn: async (email: string, pass: string) => {
+        if (signinLock) {
+          console.warn('[Auth] Ignored duplicate signin submission (in-flight)');
+          return false;
+        }
+        signinLock = true;
+        set({
+          isLoading: true,
+          authError: null,
+          isRateLimited: false,
+          signinRequest: { inFlight: true, error: null },
+        });
+
         try {
-          set({ isLoading: true, authError: null, isRateLimited: false });
           const { session, user } = await authService.signIn(email, pass);
 
           if (!user) throw new Error('Failed to retrieve user upon sign in');
@@ -323,6 +404,7 @@ export const useAuthStore = create<AuthStoreState>()(
               authModalOpen: false,
               isLoading: false,
               authError: null,
+              signinRequest: { inFlight: false, error: null },
               verificationMessage: {
                 type: 'info',
                 text: 'Please confirm your email address before entering CODE SOCIAL.',
@@ -365,6 +447,7 @@ export const useAuthStore = create<AuthStoreState>()(
             authModalOpen: false,
             isLoading: false,
             authError: null,
+            signinRequest: { inFlight: false, error: null },
             verificationMessage: null,
           });
 
@@ -382,6 +465,7 @@ export const useAuthStore = create<AuthStoreState>()(
               unverifiedEmail: email.trim(),
               authModalOpen: false,
               isLoading: false,
+              signinRequest: { inFlight: false, error: null },
               verificationMessage: {
                 type: 'info',
                 text: 'Please verify your email before continuing.',
@@ -390,14 +474,35 @@ export const useAuthStore = create<AuthStoreState>()(
             return true;
           }
 
-          set({ authError: errorMsg, isLoading: false });
+          set({
+            authError: errorMsg,
+            signinRequest: { inFlight: false, error: errorMsg },
+            isLoading: false,
+          });
           return false;
+        } finally {
+          signinLock = false;
+          set((state) => ({
+            signinRequest: { ...state.signinRequest, inFlight: false },
+            isLoading: false,
+          }));
         }
       },
 
       signUp: async (email: string, pass: string, username: string, displayName: string) => {
+        if (signupLock) {
+          console.warn('[Auth] Ignored duplicate signup submission (in-flight)');
+          return false;
+        }
+        signupLock = true;
+        set({
+          isLoading: true,
+          authError: null,
+          isRateLimited: false,
+          signupRequest: { inFlight: true, error: null, isRateLimited: false },
+        });
+
         try {
-          set({ isLoading: true, authError: null, isRateLimited: false });
           const cleanHandle = username.trim().replace(/^@/, '');
           const { user, session } = await authService.signUp(email, pass, {
             username: cleanHandle,
@@ -422,10 +527,11 @@ export const useAuthStore = create<AuthStoreState>()(
               authModalOpen: false,
               isLoading: false,
               authError: null,
+              signupRequest: { inFlight: false, error: null, isRateLimited: false },
               verificationMessage: null,
             });
 
-            // Start initial 60s cooldown for resend button
+            // Start initial 60s cooldown for resend button ONLY
             useAppStateStore.getState().startResendCooldown(60);
             return true;
           }
@@ -450,7 +556,7 @@ export const useAuthStore = create<AuthStoreState>()(
             currentUser: profile,
             hasSession: true,
             emailVerified: true,
-            profileOnboardingCompleted: false, // Must complete profile setup next
+            profileOnboardingCompleted: false,
             authState: 'VERIFIED_AUTHENTICATED',
             isAuthenticated: true,
             verificationStatus: 'VERIFIED',
@@ -459,20 +565,29 @@ export const useAuthStore = create<AuthStoreState>()(
             authModalOpen: false,
             isLoading: false,
             authError: null,
+            signupRequest: { inFlight: false, error: null, isRateLimited: false },
           });
 
           return true;
         } catch (err: any) {
           const msg = err.message || 'Registration error';
           const isRate = msg.toLowerCase().includes('rate') || msg.toLowerCase().includes('limit');
+          const errorMsg = isRate
+            ? 'Email service is temporarily rate-limited. Please wait a few minutes before creating another account.'
+            : msg;
           set({
-            authError: isRate
-              ? 'Email sending rate limit exceeded by Supabase. Please wait a few minutes before trying again.'
-              : msg,
+            authError: errorMsg,
             isRateLimited: isRate,
+            signupRequest: { inFlight: false, error: errorMsg, isRateLimited: isRate },
             isLoading: false,
           });
           return false;
+        } finally {
+          signupLock = false;
+          set((state) => ({
+            signupRequest: { ...state.signupRequest, inFlight: false },
+            isLoading: false,
+          }));
         }
       },
 
@@ -566,6 +681,10 @@ export const useAuthStore = create<AuthStoreState>()(
       },
 
       resendVerification: async () => {
+        if (resendLock) {
+          console.warn('[Auth] Ignored duplicate resend submission (in-flight)');
+          return false;
+        }
         const { unverifiedEmail } = get();
         const appStore = useAppStateStore.getState();
 
@@ -575,6 +694,7 @@ export const useAuthStore = create<AuthStoreState>()(
 
         if (!unverifiedEmail) {
           set({
+            resendRequest: { inFlight: false, error: 'No email address specified to resend to.', isRateLimited: false },
             verificationMessage: {
               type: 'error',
               text: 'No email address specified to resend to.',
@@ -583,13 +703,18 @@ export const useAuthStore = create<AuthStoreState>()(
           return false;
         }
 
+        resendLock = true;
         appStore.setIsResending(true);
-        set({ verificationMessage: null, isRateLimited: false });
+        set({
+          resendRequest: { inFlight: true, error: null, isRateLimited: false },
+          verificationMessage: null,
+        });
 
         try {
           await authService.resendVerificationEmail(unverifiedEmail);
           appStore.startResendCooldown(60);
           set({
+            resendRequest: { inFlight: false, error: null, isRateLimited: false },
             verificationMessage: {
               type: 'success',
               text: `Verification email resent to ${unverifiedEmail}. Check your inbox or spam folder.`,
@@ -599,21 +724,26 @@ export const useAuthStore = create<AuthStoreState>()(
         } catch (err: any) {
           const msg = err.message || 'Failed to resend verification email.';
           const isRate = msg.toLowerCase().includes('rate') || msg.toLowerCase().includes('limit');
-          set({
-            isRateLimited: isRate,
-            verificationMessage: {
-              type: 'error',
-              text: isRate
-                ? 'Email rate limit reached for this project. Please wait a few minutes before trying again.'
-                : msg,
-            },
-          });
+          const errorMsg = isRate
+            ? 'Verification email sending is temporarily rate-limited. Please wait before requesting another email.'
+            : msg;
           if (isRate) {
             appStore.startResendCooldown(120);
           }
+          set({
+            resendRequest: { inFlight: false, error: errorMsg, isRateLimited: isRate },
+            verificationMessage: {
+              type: 'error',
+              text: errorMsg,
+            },
+          });
           return false;
         } finally {
+          resendLock = false;
           appStore.setIsResending(false);
+          set((state) => ({
+            resendRequest: { ...state.resendRequest, inFlight: false },
+          }));
         }
       },
 
@@ -637,6 +767,9 @@ export const useAuthStore = create<AuthStoreState>()(
           unverifiedEmail: null,
           verificationMessage: null,
           authModalOpen: false,
+          signinRequest: { inFlight: false, error: null },
+          signupRequest: { inFlight: false, error: null, isRateLimited: false },
+          resendRequest: { inFlight: false, error: null, isRateLimited: false },
         });
       },
 
@@ -659,6 +792,9 @@ export const useAuthStore = create<AuthStoreState>()(
             isLoading: false,
             authError: null,
             authModalOpen: false,
+            signinRequest: { inFlight: false, error: null },
+            signupRequest: { inFlight: false, error: null, isRateLimited: false },
+            resendRequest: { inFlight: false, error: null, isRateLimited: false },
           });
         } catch (err: any) {
           console.error('Sign out error:', err);
@@ -736,7 +872,7 @@ export const useAuthStore = create<AuthStoreState>()(
       },
     }),
     {
-      name: 'code-social-auth-storage-v6',
+      name: 'code-social-auth-storage-v7',
       partialize: (state) => ({
         profileOnboardingCompleted: state.profileOnboardingCompleted,
         onboardingCompleted: state.profileOnboardingCompleted,

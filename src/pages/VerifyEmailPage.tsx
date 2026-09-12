@@ -34,6 +34,7 @@ export const VerifyEmailPage: React.FC = () => {
     setAuthModalOpen,
     hasSession,
     profileOnboardingCompleted,
+    resendRequest,
   } = useAuthStore();
 
   const { resendCooldownSeconds, updateCooldownTick } = useAppStateStore();
@@ -269,7 +270,7 @@ export const VerifyEmailPage: React.FC = () => {
   };
 
   const handleResend = async () => {
-    if (resendCooldownSeconds > 0) return;
+    if (resendCooldownSeconds > 0 || resendRequest?.inFlight) return;
     await resendVerification();
   };
 
@@ -498,10 +499,10 @@ export const VerifyEmailPage: React.FC = () => {
 
                 <button
                   onClick={handleResend}
-                  disabled={resendCooldownSeconds > 0 || isCheckingVerification}
+                  disabled={resendCooldownSeconds > 0 || isCheckingVerification || resendRequest?.inFlight}
                   className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 active:scale-[0.99] disabled:opacity-50 text-slate-200 hover:text-white font-medium text-xs border border-slate-700/80 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingVerification ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingVerification || resendRequest?.inFlight ? 'animate-spin' : ''}`} />
                   <span>
                     {resendCooldownSeconds > 0
                       ? `Resend available in ${resendCooldownSeconds}s`

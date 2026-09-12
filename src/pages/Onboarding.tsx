@@ -64,6 +64,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
 
   const {
@@ -71,8 +72,11 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
     signUp,
     connectGithub,
     completeOnboarding,
-    authError,
-    clearError,
+    signinRequest,
+    signupRequest,
+    clearSigninError,
+    clearSignupError,
+    clearAllAuthErrors,
     isLoading,
   } = useAuthStore();
 
@@ -92,8 +96,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
 
   const goToSlide4 = (mode: 'signin' | 'signup' = 'signin') => {
     setAuthMode(mode);
-    clearError();
+    clearAllAuthErrors();
     setLocalError(null);
+    setSubmitting(false);
     if (!username && githubHandle) {
       setUsername(githubHandle.trim().replace(/^@/, '').toLowerCase());
     }
@@ -113,9 +118,16 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
     setStep(3);
   };
 
+  const isFormInFlight =
+    submitting ||
+    isLoading ||
+    (authMode === 'signin' ? signinRequest.inFlight : signupRequest.inFlight);
+
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    clearError();
+    if (isFormInFlight) return;
+
+    clearSigninError();
     setLocalError(null);
 
     if (!email.trim() || !password) {
@@ -123,20 +135,27 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
       return;
     }
 
-    const success = await signIn(email.trim(), password);
-    if (success) {
-      await completeOnboarding(selectedSpecialties, selectedTech);
-      if (githubHandle.trim()) {
-        await connectGithub(githubHandle.trim().replace(/^@/, ''));
+    setSubmitting(true);
+    try {
+      const success = await signIn(email.trim(), password);
+      if (success) {
+        await completeOnboarding(selectedSpecialties, selectedTech);
+        if (githubHandle.trim()) {
+          await connectGithub(githubHandle.trim().replace(/^@/, ''));
+        }
+        showToast('Signed in to CODE SOCIAL');
+        if (onFinish) onFinish();
       }
-      showToast('Signed in to CODE SOCIAL');
-      if (onFinish) onFinish();
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    clearError();
+    if (isFormInFlight) return;
+
+    clearSignupError();
     setLocalError(null);
 
     const cleanUsername = username.trim().replace(/^@/, '');
@@ -153,19 +172,24 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
       return;
     }
 
-    const success = await signUp(
-      email.trim(),
-      password,
-      cleanUsername,
-      displayName.trim() || cleanUsername
-    );
-    if (success) {
-      await completeOnboarding(selectedSpecialties, selectedTech);
-      if (githubHandle.trim()) {
-        await connectGithub(githubHandle.trim().replace(/^@/, ''));
+    setSubmitting(true);
+    try {
+      const success = await signUp(
+        email.trim(),
+        password,
+        cleanUsername,
+        displayName.trim() || cleanUsername
+      );
+      if (success) {
+        await completeOnboarding(selectedSpecialties, selectedTech);
+        if (githubHandle.trim()) {
+          await connectGithub(githubHandle.trim().replace(/^@/, ''));
+        }
+        showToast('Verification email sent! Please check your inbox.');
+        if (onFinish) onFinish();
       }
-      showToast('Verification email sent! Please check your inbox.');
-      if (onFinish) onFinish();
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -571,7 +595,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
                 type="button"
                 onClick={() => {
                   setAuthMode('signin');
-                  clearError();
+                  clearAllAuthErrors();
                   setLocalError(null);
                 }}
                 className={`py-2 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
@@ -587,7 +611,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
                 type="button"
                 onClick={() => {
                   setAuthMode('signup');
-                  clearError();
+                  clearAllAuthErrors();
                   setLocalError(null);
                   if (!username && githubHandle) {
                     setUsername(githubHandle.trim().replace(/^@/, '').toLowerCase());
@@ -604,11 +628,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
               </button>
             </div>
 
-            {/* Error Message Display */}
-            {(authError || localError) && (
+            {/* Error Message Display (Strictly scoped to active form) */}
+            {(localError || (authMode === 'signin' ? signinRequest.error : signupRequest.error)) && (
               <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700 animate-in fade-in duration-150">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
-                <span className="leading-relaxed">{localError || authError}</span>
+                <span className="leading-relaxed">
+                  {localError || (authMode === 'signin' ? signinRequest.error : signupRequest.error)}
+                </span>
               </div>
             )}
 
@@ -699,10 +725,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onFinish }) => {
 
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isFormInFlight}
                 className="w-full py-3 mt-1 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-xs shadow-soft transition-all active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
               >
-                {isLoading ? (
+                {isFormInFlight ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-white" />
                     <span>Processing...</span>
