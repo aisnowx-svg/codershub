@@ -1,0 +1,23 @@
+# ==============================================================================
+# CODE SOCIAL — CLOUDFLARE PAGES FUNCTIONS ENVIRONMENT SECRETS (.dev.vars)
+# ==============================================================================
+# WARNING: These are SERVER-SIDE ONLY secrets for Cloudflare Pages Functions.
+# - DO NOT prefix these with VITE_
+# - DO NOT put these in React frontend source code
+# - DO NOT expose these in client bundles
+# - NEVER commit your real .dev.vars to git
+#
+# In production on Cloudflare Pages:
+# Add these via Cloudflare Dashboard -> Workers & Pages -> codershub-kqi -> Settings -> Variables and Secrets.
+# ==============================================================================
+
+# GitHub App (DevQuro) Credentials
+GITHUB_APP_ID=4917548
+GITHUB_CLIENT_ID=YOUR_GITHUB_APP_CLIENT_ID
+GITHUB_CLIENT_SECRET=YOUR_GITHUB_APP_CLIENT_SECRET
+GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_WEBHOOK_SECRET=YOUR_GITHUB_WEBHOOK_SECRET
+
+# Supabase Server Connection (Used by Pages Functions)
+SUPABASE_URL=https://xcwizfrvceacokchguwz.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SUPABASE_SERVICE_ROLE_KEY

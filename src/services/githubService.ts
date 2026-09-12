@@ -10,13 +10,13 @@ export const githubService = {
     const secureState = state || (typeof crypto !== 'undefined' ? crypto.randomUUID() : Math.random().toString(36).substring(2));
 
     try {
-      const res = await fetch(`/api/github/oauth/url?redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`);
+      const res = await fetch(`/api/github/auth?format=json&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.url) return data.url;
       }
     } catch {
-      // Backend not running locally or endpoint not reached; fallback to direct OAuth/Install URL
+      // Endpoint not reached; fallback to direct OAuth/Install URL
     }
 
     const clientId = (import.meta as any).env?.VITE_GITHUB_CLIENT_ID;
@@ -45,7 +45,7 @@ export const githubService = {
 
     const callback = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : 'https://codershub-kqi.pages.dev/auth/callback');
 
-    const res = await fetch('/api/github/oauth/exchange', {
+    const res = await fetch('/api/github/callback', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -173,7 +173,7 @@ export const githubService = {
 
     if (!token) throw new Error('Not authenticated');
 
-    const res = await fetch('/api/github/sync', {
+    const res = await fetch('/api/github/repos', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

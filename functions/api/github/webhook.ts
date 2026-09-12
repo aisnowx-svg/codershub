@@ -1,10 +1,22 @@
-import { createClient } from '@supabase/supabase-js';
+/**
+ * Cloudflare Pages Function: POST /api/github/webhook
+ * Handles incoming GitHub App webhooks.
+ * 
+ * NOTE: The webhook is NOT activated yet on GitHub.
+ * Security & Requirements:
+ * - Verifies HMAC SHA-256 (X-Hub-Signature-256)
+ * - Rejects invalid signatures with 401
+ * - Idempotency tracking via X-GitHub-Delivery
+ * - Updates internal GitHub metadata only
+ * - NEVER creates public CODE SOCIAL posts or builds
+ */
+import { getSupabaseClient, jsonResponse } from './_shared';
 
-// Idempotency cache for delivery IDs in memory
+// In-memory idempotency cache for recent delivery IDs
 const processedDeliveries = new Set<string>();
 
 /**
- * Verify GitHub webhook HMAC SHA256 signature
+ * Verifies GitHub webhook HMAC SHA-256 signature using Web Crypto API
  */
 async function verifySignature(secret: string, header: string, payload: string): Promise<boolean> {
   if (!header || !header.startsWith('sha256=')) return false;
@@ -26,53 +38,42 @@ async function verifySignature(secret: string, header: string, payload: string):
   return signatureHex === expectedHex;
 }
 
-export async function onRequestPost(context: { env: Record<string, string>; request: Request }) {
+export async function onRequestPost(context: { env: Record<string, string | undefined>; request: Request }) {
   try {
     const signature = context.request.headers.get('x-hub-signature-256') || '';
     const event = context.request.headers.get('x-github-event') || '';
     const delivery = context.request.headers.get('x-github-delivery') || '';
 
     const webhookSecret = context.env.GITHUB_WEBHOOK_SECRET;
-
     const rawBody = await context.request.text();
 
-    // Verify signature if webhook secret is configured
+    // 1. Verify HMAC SHA-256 signature if webhook secret is configured
     if (webhookSecret) {
       const isValid = await verifySignature(webhookSecret, signature, rawBody);
       if (!isValid) {
-        return new Response(JSON.stringify({ error: 'Invalid HMAC SHA-256 signature' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ error: 'Invalid HMAC SHA-256 signature' }, 401);
       }
     }
 
-    // Idempotency check
+    // 2. Idempotency validation
     if (delivery) {
       if (processedDeliveries.has(delivery)) {
-        return new Response(JSON.stringify({ message: 'Delivery already processed' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ message: 'Delivery already processed' }, 200);
       }
       processedDeliveries.add(delivery);
       if (processedDeliveries.size > 2000) {
-        // prune cache
         const [first] = processedDeliveries;
         processedDeliveries.delete(first);
       }
     }
 
-    const payload = JSON.parse(rawBody);
+    const payload = JSON.parse(rawBody || '{}');
+    const supabase = getSupabaseClient(context.env);
 
-    const supabaseUrl = context.env.SUPABASE_URL || context.env.VITE_SUPABASE_URL || 'https://xcwizfrvceacokchguwz.supabase.co';
-    const supabaseKey = context.env.SUPABASE_SERVICE_ROLE_KEY || context.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_0YNf1JbY7nmn67CI1z7lDw_v-81E5x6';
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // Process GitHub App Events (DO NOT create public CODE SOCIAL posts or build logs)
+    // 3. Process supported GitHub App Events
+    // (Strict rule: NEVER create public CODE SOCIAL posts or builds from commits)
     switch (event) {
       case 'installation_repositories': {
-        // Repository access added or removed
         const installationId = payload.installation?.id;
         if (installationId) {
           const { data: account } = await supabase
@@ -82,7 +83,7 @@ export async function onRequestPost(context: { env: Record<string, string>; requ
             .maybeSingle();
 
           if (account) {
-            // Repositories added
+            // Repositories added to app installation
             for (const repo of payload.repositories_added || []) {
               await supabase.from('github_repositories').upsert(
                 {
@@ -98,7 +99,7 @@ export async function onRequestPost(context: { env: Record<string, string>; requ
               );
             }
 
-            // Repositories removed
+            // Repositories removed from app installation
             for (const repo of payload.repositories_removed || []) {
               await supabase
                 .from('github_repositories')
@@ -112,7 +113,6 @@ export async function onRequestPost(context: { env: Record<string, string>; requ
       }
 
       case 'repository': {
-        // Repository updated, edited, or renamed
         const repoId = payload.repository?.id;
         if (repoId) {
           await supabase
@@ -134,8 +134,7 @@ export async function onRequestPost(context: { env: Record<string, string>; requ
       }
 
       case 'push': {
-        // Push event: strictly update internal repository metadata (pushed_at)
-        // NOT creating public CODE SOCIAL posts
+        // Internal metadata update only - NO public social posts created
         const repoId = payload.repository?.id;
         if (repoId) {
           await supabase
@@ -150,18 +149,12 @@ export async function onRequestPost(context: { env: Record<string, string>; requ
       }
 
       default:
-        // Other events acknowledged without modification
+        // Acknowledge other events gracefully
         break;
     }
 
-    return new Response(JSON.stringify({ ok: true, event, delivery }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ ok: true, event, delivery });
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message || 'Error processing webhook' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ error: err.message || 'Error processing webhook' }, 500);
   }
 }
