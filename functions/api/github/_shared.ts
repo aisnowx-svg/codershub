@@ -20,6 +20,40 @@ export interface Env {
   VITE_SUPABASE_URL?: string;
   VITE_SUPABASE_PUBLISHABLE_KEY?: string;
   VITE_GITHUB_CLIENT_ID?: string;
+  VITE_SITE_URL?: string;
+  SITE_URL?: string;
+}
+
+export const CANONICAL_PRODUCTION_URL = 'https://codershub-kqi.pages.dev';
+
+/**
+ * Resolves the server-side site origin with zero localhost fallback in production.
+ */
+export function getServerSiteUrl(request: Request, env: Record<string, string | undefined>): string {
+  const url = new URL(request.url);
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+
+  if (isLocal) {
+    return url.origin;
+  }
+
+  const configured = env.VITE_SITE_URL || env.SITE_URL;
+  if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
+    return configured.replace(/\/+$/, '');
+  }
+
+  if (url.origin && !url.origin.includes('localhost') && !url.origin.includes('127.0.0.1')) {
+    return url.origin;
+  }
+
+  return CANONICAL_PRODUCTION_URL;
+}
+
+/**
+ * Resolves the server-side auth callback URL.
+ */
+export function getServerAuthCallbackUrl(request: Request, env: Record<string, string | undefined>): string {
+  return `${getServerSiteUrl(request, env)}/auth/callback`;
 }
 
 /**

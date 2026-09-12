@@ -9,6 +9,7 @@
 import {
   getAuthenticatedUser,
   getSupabaseClient,
+  getServerSiteUrl,
   jsonResponse,
 } from './_shared';
 
@@ -17,6 +18,7 @@ import {
  */
 export async function onRequestGet(context: { env: Record<string, string | undefined>; request: Request }) {
   const url = new URL(context.request.url);
+  const siteUrl = getServerSiteUrl(context.request, context.env);
   const errorParam = url.searchParams.get('error');
   const errorDesc = url.searchParams.get('error_description');
   const code = url.searchParams.get('code');
@@ -25,7 +27,7 @@ export async function onRequestGet(context: { env: Record<string, string | undef
 
   // If user declined or GitHub encountered an error, redirect to CODE SOCIAL callback page with error
   if (errorParam) {
-    const target = new URL('/auth/callback', url.origin);
+    const target = new URL('/auth/callback', siteUrl);
     target.searchParams.set('error', errorParam);
     if (errorDesc) target.searchParams.set('error_description', errorDesc);
     return Response.redirect(target.toString(), 302);
@@ -33,7 +35,7 @@ export async function onRequestGet(context: { env: Record<string, string | undef
 
   // If code is present, forward to frontend callback page to complete authenticated exchange
   if (code) {
-    const target = new URL('/auth/callback', url.origin);
+    const target = new URL('/auth/callback', siteUrl);
     target.searchParams.set('code', code);
     if (state) target.searchParams.set('state', state);
     if (installationId) target.searchParams.set('installation_id', installationId);
@@ -41,7 +43,7 @@ export async function onRequestGet(context: { env: Record<string, string | undef
   }
 
   // Missing code or error parameter
-  const target = new URL('/profile', url.origin);
+  const target = new URL('/profile', siteUrl);
   target.searchParams.set('error', 'invalid_github_callback');
   return Response.redirect(target.toString(), 302);
 }

@@ -1,5 +1,15 @@
 import { supabase } from '../lib/supabase';
-import { User, Session, AuthChangeEvent } from '@supabase/supabase-js';
+import { User, Session, AuthChangeEvent, Provider } from '@supabase/supabase-js';
+import {
+  getSiteUrl,
+  getAuthCallbackUrl,
+  getVerifyEmailUrl,
+  getPasswordResetUrl,
+  PRODUCTION_SITE_URL,
+  LOCAL_DEV_URL,
+  isLocalDev,
+  isProduction,
+} from '../utils/url';
 
 export interface AuthUserMetadata {
   username?: string;
@@ -8,29 +18,31 @@ export interface AuthUserMetadata {
   avatar_url?: string;
 }
 
-export function getSiteUrl(): string {
-  if (typeof window !== 'undefined') {
-    const envUrl = (import.meta as any).env?.VITE_SITE_URL;
-    if (envUrl && typeof envUrl === 'string' && envUrl.trim().startsWith('http')) {
-      return envUrl.trim().replace(/\/+$/, '');
-    }
-    return window.location.origin;
-  }
-  return (import.meta as any).env?.VITE_SITE_URL || 'http://localhost:5173';
-}
+// Re-export URL resolver helpers for backwards compatibility
+export {
+  getSiteUrl,
+  getAuthCallbackUrl,
+  getVerifyEmailUrl,
+  getPasswordResetUrl,
+  PRODUCTION_SITE_URL,
+  LOCAL_DEV_URL,
+  isLocalDev,
+  isProduction,
+};
 
 export const authService = {
   /**
-   * Signs up a new user with email and password
+   * Signs up a new user with email and password.
+   * Explicitly sets emailRedirectTo using environment-aware URL resolver.
    */
   async signUp(email: string, password: string, metadata?: AuthUserMetadata) {
-    const siteUrl = getSiteUrl();
+    const redirectUrl = getVerifyEmailUrl();
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: metadata,
-        emailRedirectTo: `${siteUrl}/verify-email`,
+        emailRedirectTo: redirectUrl,
       },
     });
 
@@ -42,15 +54,54 @@ export const authService = {
   },
 
   /**
-   * Resends verification email for sign up
+   * Resends verification email for sign up.
+   * Explicitly sets emailRedirectTo using environment-aware URL resolver.
    */
   async resendVerificationEmail(email: string) {
-    const siteUrl = getSiteUrl();
+    const redirectUrl = getVerifyEmailUrl();
     const { data, error } = await supabase.auth.resend({
       type: 'signup',
       email,
       options: {
-        emailRedirectTo: `${siteUrl}/verify-email`,
+        emailRedirectTo: redirectUrl,
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  /**
+   * Sends password reset email.
+   * Explicitly sets redirectTo to environment-aware password reset URL.
+   */
+  async resetPasswordForEmail(email: string) {
+    const redirectUrl = getPasswordResetUrl();
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectUrl,
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  /**
+   * Supabase OAuth sign in (e.g. GitHub, Google).
+   * Explicitly sets redirectTo to environment-aware auth callback URL.
+   */
+  async signInWithOAuth(provider: Provider, scopes?: string) {
+    const redirectUrl = getAuthCallbackUrl();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: redirectUrl,
+        scopes,
       },
     });
 

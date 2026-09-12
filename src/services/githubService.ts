@@ -1,12 +1,13 @@
 import { supabase } from '../lib/supabase';
 import { GitHubAccount, GitHubRepository, ProjectGitHubRepository } from '../types/github';
+import { getAuthCallbackUrl } from '../utils/url';
 
 export const githubService = {
   /**
    * Generates or fetches the GitHub OAuth / App installation authorization URL
    */
   async getAuthUrl(redirectUri?: string, state?: string): Promise<string> {
-    const callback = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : 'https://codershub-kqi.pages.dev/auth/callback');
+    const callback = redirectUri || getAuthCallbackUrl();
     const secureState = state || (typeof crypto !== 'undefined' ? crypto.randomUUID() : Math.random().toString(36).substring(2));
 
     try {
@@ -43,7 +44,7 @@ export const githubService = {
       throw new Error('Authentication required: please sign in to CODE SOCIAL first.');
     }
 
-    const callback = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : 'https://codershub-kqi.pages.dev/auth/callback');
+    const callback = redirectUri || getAuthCallbackUrl();
 
     const res = await fetch('/api/github/callback', {
       method: 'POST',

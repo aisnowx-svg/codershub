@@ -3,7 +3,7 @@
  * Handles GET & POST requests to initiate GitHub OAuth / App authorization.
  * Keep GitHub authentication logic entirely server-side.
  */
-import { jsonResponse } from './_shared';
+import { jsonResponse, getServerAuthCallbackUrl } from './_shared';
 
 export async function onRequestGet(context: { env: Record<string, string | undefined>; request: Request }) {
   return handleAuth(context);
@@ -15,7 +15,7 @@ export async function onRequestPost(context: { env: Record<string, string | unde
 
 async function handleAuth(context: { env: Record<string, string | undefined>; request: Request }) {
   const url = new URL(context.request.url);
-  const redirectUri = url.searchParams.get('redirect_uri') || `${url.origin}/auth/callback`;
+  const redirectUri = url.searchParams.get('redirect_uri') || getServerAuthCallbackUrl(context.request, context.env);
   const state = url.searchParams.get('state') || crypto.randomUUID();
 
   const clientId = context.env.GITHUB_CLIENT_ID || context.env.VITE_GITHUB_CLIENT_ID;
