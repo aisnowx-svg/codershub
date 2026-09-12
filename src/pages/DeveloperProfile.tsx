@@ -22,6 +22,12 @@ import {
   Upload,
   Loader2,
   X,
+  CheckCircle2,
+  RefreshCw,
+  AlertCircle,
+  ExternalLink,
+  Lock,
+  FolderGit2,
 } from 'lucide-react';
 import { Developer, BuildLog, Project, DeveloperSpecialty } from '../types';
 
@@ -31,7 +37,18 @@ interface DeveloperProfileProps {
 
 export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId }) => {
   const { currentUser, updateProfile, signOut, isAuthenticated, setAuthModalOpen } = useAuthStore();
-  const { connectAccount } = useGitHubStore();
+  const {
+    account,
+    repositories,
+    isSyncing,
+    isConnecting,
+    lastSyncError,
+    startConnect,
+    disconnectAccount,
+    triggerSync,
+    loadAccount,
+    clearError,
+  } = useGitHubStore();
   const { closeSubPage, showToast } = useUIStore();
 
   const [developer, setDeveloper] = useState<Developer>(currentUser);
@@ -92,6 +109,12 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
 
     loadDeveloperData();
   }, [targetId, currentUser?.id]);
+
+  useEffect(() => {
+    if (isSelf && currentUser?.id) {
+      loadAccount(currentUser.id);
+    }
+  }, [isSelf, currentUser?.id, loadAccount]);
 
   const handleToggleFollow = async () => {
     if (!isAuthenticated) {
@@ -160,9 +183,6 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
       };
 
       await updateProfile(updated);
-      if (cleanGithub) {
-        await connectAccount(cleanGithub);
-      }
       setDeveloper((prev) => ({ ...prev, ...updated }));
       setEditModalOpen(false);
       showToast('Profile updated successfully');
@@ -292,6 +312,189 @@ export const DeveloperProfile: React.FC<DeveloperProfileProps> = ({ developerId 
           </div>
         )}
       </div>
+
+      {/* GitHub App Integration Section */}
+      {isSelf && (
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-soft space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shadow-xs">
+                <GithubIcon className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">GitHub Integration</h2>
+                <p className="text-[11px] text-slate-400">DevQuro App &bull; Verified Repository Proof of Work</p>
+              </div>
+            </div>
+
+            {account && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => triggerSync()}
+                  disabled={isSyncing}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  title="Sync repositories from GitHub"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'Syncing...' : 'Sync Repos'}</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    if (window.confirm('Disconnect your GitHub account from CODE SOCIAL?')) {
+                      await disconnectAccount(currentUser.id);
+                      showToast('GitHub account disconnected.');
+                    }
+                  }}
+                  disabled={isSyncing}
+                  className="px-2.5 py-1.5 rounded-lg border border-red-200/80 text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                >
+                  Disconnect GitHub
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Error State */}
+          {lastSyncError && (
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200/80 flex items-start justify-between gap-3 text-xs text-red-700">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <span>{lastSyncError}</span>
+              </div>
+              <button
+                onClick={() => {
+                  clearError();
+                  startConnect();
+                }}
+                className="px-3 py-1 rounded-lg bg-red-600 text-white font-medium text-xs hover:bg-red-700 transition-colors shrink-0 cursor-pointer"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {/* Connecting State */}
+          {isConnecting && (
+            <div className="py-6 flex flex-col items-center justify-center space-y-2 text-slate-600">
+              <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
+              <span className="text-xs font-medium font-mono">Connecting to GitHub...</span>
+            </div>
+          )}
+
+          {/* Connected State */}
+          {!isConnecting && account && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50/80 border border-slate-200/60">
+                <div className="flex items-center gap-3">
+                  <img
+                    src={account.avatarUrl}
+                    alt={account.githubUsername}
+                    className="w-9 h-9 rounded-full border border-slate-200"
+                  />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900 font-mono">@{account.githubUsername}</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        Connected
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Sync Status: <span className="font-medium text-slate-600 capitalize">{account.syncStatus}</span> &bull; {repositories.length} accessible repositories
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={account.profileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-slate-500 hover:text-blue-600 flex items-center gap-1 transition-colors"
+                >
+                  <span>View GitHub</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+
+              {/* Accessible Repositories */}
+              {repositories.length > 0 ? (
+                <div className="space-y-2">
+                  <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Accessible Repositories ({repositories.length})
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {repositories.map((repo) => (
+                      <div
+                        key={repo.id || repo.githubRepoId}
+                        className="p-3 rounded-xl border border-slate-200/70 bg-white hover:border-slate-300 transition-colors flex items-start justify-between gap-2 text-left"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <FolderGit2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <a
+                              href={repo.htmlUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-semibold text-slate-900 hover:text-blue-600 truncate transition-colors font-mono"
+                            >
+                              {repo.name}
+                            </a>
+                            {repo.isPrivate && (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 text-[9px] font-medium border border-amber-200/60 flex items-center gap-0.5">
+                                <Lock className="w-2.5 h-2.5" /> Private
+                              </span>
+                            )}
+                          </div>
+                          {repo.description && (
+                            <p className="text-[11px] text-slate-500 truncate mt-1">
+                              {repo.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3 mt-2 text-[10px] text-slate-400 font-mono">
+                            {repo.primaryLanguage && (
+                              <span className="flex items-center gap-1 text-slate-600 font-sans">
+                                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                                {repo.primaryLanguage}
+                              </span>
+                            )}
+                            {repo.starsCount > 0 && (
+                              <span>★ {repo.starsCount}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center text-xs text-slate-500">
+                  No repositories accessible yet. Configure repository access in your DevQuro GitHub App installation settings.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Not Connected State */}
+          {!isConnecting && !account && !lastSyncError && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50/80 border border-slate-200/60">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-slate-800">
+                  Link DevQuro to verify Proof of Work
+                </p>
+                <p className="text-[11px] text-slate-500 leading-relaxed max-w-lg">
+                  Connect your GitHub account to import repositories, verify commit activity, and link repositories to CODE SOCIAL projects.
+                </p>
+              </div>
+              <button
+                onClick={() => startConnect()}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-98 text-white font-medium text-xs flex items-center justify-center gap-2 transition-all shadow-xs shrink-0 cursor-pointer"
+              >
+                <GithubIcon className="w-3.5 h-3.5 text-white" />
+                <span>Connect GitHub</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 2. Proof of Work Grid */}
       <ProofOfWork

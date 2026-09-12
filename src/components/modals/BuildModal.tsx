@@ -18,7 +18,7 @@ export const BuildModal: React.FC = () => {
   const { addBuildLog } = useFeedStore();
   const { projects, createProject } = useProjectStore();
   const { currentUser, isAuthenticated, setAuthModalOpen } = useAuthStore();
-  const { account, repositories, getCommitsForRepo, linkRepositoryToProject } = useGitHubStore();
+  const { repositories, linkRepositoryToProject } = useGitHubStore();
 
   const [activeTab, setActiveTab] = useState<BuildTab>(buildModalTab || 'log');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -60,7 +60,7 @@ export const BuildModal: React.FC = () => {
 
   if (!buildModalOpen) return null;
 
-  const availableCommits = account ? getCommitsForRepo('default') : [];
+  const availableCommits: GitHubCommit[] = [];
 
   const handleSelectCommit = (commit: GitHubCommit) => {
     setCommitHash(commit.shortSha);

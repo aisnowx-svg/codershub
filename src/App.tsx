@@ -11,6 +11,7 @@ import { DeveloperProfile } from './pages/DeveloperProfile';
 import { ProjectPage } from './pages/ProjectPage';
 import { SearchPage } from './pages/SearchPage';
 import { VerifyEmailScreen } from './pages/VerifyEmailScreen';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { getRouteFromPathname, getPathnameFromUI } from './utils/router';
 
 export function App() {
@@ -61,6 +62,8 @@ export function App() {
   // Sync tab/subPage state changes to URL
   useEffect(() => {
     if (isLoading || verificationStatus === 'INITIALIZING') return;
+    if (window.location.pathname === '/auth/callback') return;
+
     if (verificationStatus === 'UNVERIFIED') {
       if (window.location.pathname !== '/verify-email') {
         window.history.replaceState(null, '', '/verify-email');
@@ -156,7 +159,12 @@ export function App() {
     return <VerifyEmailScreen />;
   }
 
-  // 2. Onboarding Gate (only for verified users who haven't completed onboarding)
+  // 2. GITHUB OAUTH / APP CALLBACK ROUTE
+  if (window.location.pathname === '/auth/callback') {
+    return <AuthCallbackPage />;
+  }
+
+  // 3. Onboarding Gate (only for verified users who haven't completed onboarding)
   if (!onboardingCompleted) {
     return <Onboarding />;
   }

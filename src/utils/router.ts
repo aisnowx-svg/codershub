@@ -4,45 +4,50 @@ export function getRouteFromPathname(): {
   tab: MainTab;
   subPage: SubPage | null;
   isVerifyEmail: boolean;
+  isAuthCallback: boolean;
 } {
   if (typeof window === 'undefined') {
-    return { tab: 'home', subPage: null, isVerifyEmail: false };
+    return { tab: 'home', subPage: null, isVerifyEmail: false, isAuthCallback: false };
   }
 
   const path = window.location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
 
+  if (path === '/auth/callback') {
+    return { tab: 'profile', subPage: null, isVerifyEmail: false, isAuthCallback: true };
+  }
+
   if (path === '/verify-email') {
-    return { tab: 'home', subPage: null, isVerifyEmail: true };
+    return { tab: 'home', subPage: null, isVerifyEmail: true, isAuthCallback: false };
   }
 
   if (path.startsWith('/project/')) {
     const id = path.split('/')[2];
-    return { tab: 'projects', subPage: { type: 'project', id }, isVerifyEmail: false };
+    return { tab: 'projects', subPage: { type: 'project', id }, isVerifyEmail: false, isAuthCallback: false };
   }
 
   if (path.startsWith('/developer/')) {
     const id = path.split('/')[2];
-    return { tab: 'discover', subPage: { type: 'developer', id }, isVerifyEmail: false };
+    return { tab: 'discover', subPage: { type: 'developer', id }, isVerifyEmail: false, isAuthCallback: false };
   }
 
   if (path === '/search') {
-    return { tab: 'home', subPage: { type: 'search' }, isVerifyEmail: false };
+    return { tab: 'home', subPage: { type: 'search' }, isVerifyEmail: false, isAuthCallback: false };
   }
 
   switch (path) {
     case '/discover':
-      return { tab: 'discover', subPage: null, isVerifyEmail: false };
+      return { tab: 'discover', subPage: null, isVerifyEmail: false, isAuthCallback: false };
     case '/projects':
-      return { tab: 'projects', subPage: null, isVerifyEmail: false };
+      return { tab: 'projects', subPage: null, isVerifyEmail: false, isAuthCallback: false };
     case '/alerts':
     case '/notifications':
-      return { tab: 'alerts', subPage: null, isVerifyEmail: false };
+      return { tab: 'alerts', subPage: null, isVerifyEmail: false, isAuthCallback: false };
     case '/profile':
-      return { tab: 'profile', subPage: null, isVerifyEmail: false };
+      return { tab: 'profile', subPage: null, isVerifyEmail: false, isAuthCallback: false };
     case '/home':
     case '/':
     default:
-      return { tab: 'home', subPage: null, isVerifyEmail: false };
+      return { tab: 'home', subPage: null, isVerifyEmail: false, isAuthCallback: false };
   }
 }
 

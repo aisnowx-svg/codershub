@@ -11,6 +11,7 @@ export interface GitHubAccount {
   connectedAt: string;
   lastSyncedAt: string;
   syncStatus: GitHubSyncStatus;
+  installationId?: number;
 }
 
 export interface GitHubRepository {

@@ -1,9 +1,110 @@
 import { supabase } from '../lib/supabase';
-import { GitHubAccount, ProjectGitHubRepository } from '../types/github';
+import { GitHubAccount, GitHubRepository, ProjectGitHubRepository } from '../types/github';
 
 export const githubService = {
   /**
-   * Retrieves GitHub account details for a developer
+   * Generates or fetches the GitHub OAuth / App installation authorization URL
+   */
+  async getAuthUrl(redirectUri?: string, state?: string): Promise<string> {
+    const callback = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : 'https://codershub-kqi.pages.dev/auth/callback');
+    const secureState = state || (typeof crypto !== 'undefined' ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+
+    try {
+      const res = await fetch(`/api/github/oauth/url?redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) return data.url;
+      }
+    } catch {
+      // Backend not running locally or endpoint not reached; fallback to direct OAuth/Install URL
+    }
+
+    const clientId = (import.meta as any).env?.VITE_GITHUB_CLIENT_ID;
+    if (clientId) {
+      return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${encodeURIComponent(secureState)}`;
+    }
+
+    // Default GitHub App direct installation URL
+    return 'https://github.com/apps/devquro/installations/new';
+  },
+
+  /**
+   * Exchanges GitHub authorization code for access token via backend service
+   */
+  async exchangeCode(
+    code: string,
+    installationId?: string,
+    redirectUri?: string
+  ): Promise<{ account: GitHubAccount; repositories: GitHubRepository[] }> {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    if (!token) {
+      throw new Error('Authentication required: please sign in to CODE SOCIAL first.');
+    }
+
+    const callback = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : 'https://codershub-kqi.pages.dev/auth/callback');
+
+    const res = await fetch('/api/github/oauth/exchange', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        code,
+        installation_id: installationId ? Number(installationId) : undefined,
+        redirect_uri: callback,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      throw new Error(data.error || 'Failed to connect GitHub account via server');
+    }
+
+    const row = data.account;
+    const account: GitHubAccount = {
+      id: row.id,
+      githubUserId: Number(row.github_user_id) || 0,
+      githubUsername: row.github_username,
+      avatarUrl: row.avatar_url || '',
+      profileUrl: row.profile_url || `https://github.com/${row.github_username}`,
+      publicRepoCount: row.public_repo_count || 0,
+      totalStars: row.total_stars || 0,
+      connectedAt: row.connected_at,
+      lastSyncedAt: row.last_synced_at,
+      syncStatus: (row.sync_status as any) || 'synced',
+      installationId: row.installation_id ? Number(row.installation_id) : undefined,
+    };
+
+    const repositories: GitHubRepository[] = (data.repositories || []).map((r: any) => ({
+      id: r.id,
+      githubRepoId: Number(r.github_repo_id),
+      fullName: r.full_name,
+      name: r.name,
+      ownerLogin: r.full_name.split('/')[0] || row.github_username,
+      description: r.description || '',
+      htmlUrl: r.html_url,
+      defaultBranch: r.default_branch || 'main',
+      isPrivate: Boolean(r.is_private),
+      isFork: Boolean(r.is_fork),
+      primaryLanguage: r.primary_language || null,
+      languages: r.languages || {},
+      starsCount: r.stars_count || 0,
+      forksCount: r.forks_count || 0,
+      openIssuesCount: r.open_issues_count || 0,
+      pushedAt: r.updated_at || new Date().toISOString(),
+      createdAt: r.created_at || new Date().toISOString(),
+      updatedAt: r.updated_at || new Date().toISOString(),
+    }));
+
+    return { account, repositories };
+  },
+
+  /**
+   * Retrieves GitHub account details for a developer from Supabase
    */
   async getStatus(userId: string): Promise<GitHubAccount | null> {
     const { data: row, error } = await supabase
@@ -25,67 +126,90 @@ export const githubService = {
       connectedAt: row.connected_at,
       lastSyncedAt: row.last_synced_at,
       syncStatus: (row.sync_status as any) || 'synced',
+      installationId: row.installation_id ? Number(row.installation_id) : undefined,
     };
   },
 
   /**
-   * Records a linked GitHub account in the database
+   * Retrieves repositories for a given account from Supabase
    */
-  async connect(userId: string, username: string): Promise<GitHubAccount> {
-    const cleanUsername = username.trim().replace(/^@/, '');
-    const payload = {
-      user_id: userId,
-      github_username: cleanUsername,
-      avatarUrl: `https://avatars.githubusercontent.com/u/${cleanUsername}?v=4`,
-      profileUrl: `https://github.com/${cleanUsername}`,
-      public_repo_count: 0,
-      total_stars: 0,
-      sync_status: 'synced',
-      connected_at: new Date().toISOString(),
-      last_synced_at: new Date().toISOString(),
-    };
-
-    const { data: row, error } = await supabase
-      .from('github_accounts')
-      .upsert(payload, { onConflict: 'user_id' })
+  async getRepositories(accountId: string): Promise<GitHubRepository[]> {
+    const { data: rows, error } = await supabase
+      .from('github_repositories')
       .select('*')
-      .single();
+      .eq('account_id', accountId)
+      .order('updated_at', { ascending: false });
 
-    if (error) {
-      // Fallback in memory object
-      return {
-        id: `gh-${Date.now()}`,
-        githubUserId: 0,
-        githubUsername: cleanUsername,
-        avatarUrl: `https://avatars.githubusercontent.com/${cleanUsername}`,
-        profileUrl: `https://github.com/${cleanUsername}`,
-        publicRepoCount: 0,
-        totalStars: 0,
-        connectedAt: new Date().toISOString(),
-        lastSyncedAt: 'Just now',
-        syncStatus: 'synced',
-      };
+    if (error || !rows) return [];
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      githubRepoId: Number(r.github_repo_id),
+      fullName: r.full_name,
+      name: r.name,
+      ownerLogin: r.full_name.split('/')[0] || '',
+      description: r.description || '',
+      htmlUrl: r.html_url,
+      defaultBranch: r.default_branch || 'main',
+      isPrivate: Boolean(r.is_private),
+      isFork: Boolean(r.is_fork),
+      primaryLanguage: r.primary_language || null,
+      languages: r.languages || {},
+      starsCount: r.stars_count || 0,
+      forksCount: r.forks_count || 0,
+      openIssuesCount: r.open_issues_count || 0,
+      pushedAt: r.updated_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  },
+
+  /**
+   * Triggers a repository sync via backend
+   */
+  async syncRepositories(): Promise<GitHubRepository[]> {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+
+    if (!token) throw new Error('Not authenticated');
+
+    const res = await fetch('/api/github/sync', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || 'Failed to sync repositories');
     }
 
-    // Also update github_handle on user profile
-    await supabase.from('profiles').update({ github_handle: cleanUsername }).eq('id', userId);
-
-    return {
-      id: row.id,
-      githubUserId: Number(row.github_user_id) || 0,
-      githubUsername: row.github_username,
-      avatarUrl: row.avatar_url || '',
-      profileUrl: row.profile_url || `https://github.com/${row.github_username}`,
-      publicRepoCount: row.public_repo_count || 0,
-      totalStars: row.total_stars || 0,
-      connectedAt: row.connected_at,
-      lastSyncedAt: row.last_synced_at,
-      syncStatus: 'synced',
-    };
+    return (data.repositories || []).map((r: any) => ({
+      id: r.id,
+      githubRepoId: Number(r.github_repo_id),
+      fullName: r.full_name,
+      name: r.name,
+      ownerLogin: r.full_name.split('/')[0] || '',
+      description: r.description || '',
+      htmlUrl: r.html_url,
+      defaultBranch: r.default_branch || 'main',
+      isPrivate: Boolean(r.is_private),
+      isFork: Boolean(r.is_fork),
+      primaryLanguage: r.primary_language || null,
+      languages: r.languages || {},
+      starsCount: r.stars_count || 0,
+      forksCount: r.forks_count || 0,
+      openIssuesCount: r.open_issues_count || 0,
+      pushedAt: r.updated_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
   },
 
   /**
-   * Disconnects GitHub account
+   * Disconnects GitHub account safely from database
    */
   async disconnect(userId: string): Promise<boolean> {
     await supabase.from('github_accounts').delete().eq('user_id', userId);
@@ -124,17 +248,23 @@ export const githubService = {
   async linkRepositoryToProject(
     projectId: string,
     repoFullName: string,
-    githubRepoId?: number
+    githubRepoId?: number,
+    htmlUrl?: string,
+    defaultBranch = 'main',
+    primaryLanguage = 'TypeScript',
+    isPrimary = true,
+    rootDirectory?: string
   ): Promise<ProjectGitHubRepository> {
     const repoId = githubRepoId || Date.now();
     const payload = {
       project_id: projectId,
       github_repo_id: repoId,
       repository_full_name: repoFullName,
-      html_url: `https://github.com/${repoFullName}`,
-      default_branch: 'main',
-      primary_language: 'TypeScript',
-      is_primary: true,
+      html_url: htmlUrl || `https://github.com/${repoFullName}`,
+      default_branch: defaultBranch,
+      primary_language: primaryLanguage,
+      is_primary: isPrimary,
+      root_directory: rootDirectory || null,
       linked_at: new Date().toISOString(),
     };
 
@@ -151,7 +281,7 @@ export const githubService = {
     // Update project repository_url
     await supabase
       .from('projects')
-      .update({ repository_url: `https://github.com/${repoFullName}` })
+      .update({ repository_url: payload.html_url })
       .eq('id', projectId);
 
     return {
@@ -165,5 +295,22 @@ export const githubService = {
       isPrimary: row.is_primary,
       linkedAt: row.linked_at,
     };
+  },
+
+  /**
+   * Unlinks a GitHub repository from a project
+   */
+  async unlinkRepositoryFromProject(projectId: string, githubRepoId: number): Promise<boolean> {
+    const { error } = await supabase
+      .from('project_github_repositories')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('github_repo_id', githubRepoId);
+
+    if (error) {
+      throw new Error(`Error unlinking repo: ${error.message}`);
+    }
+
+    return true;
   },
 };
